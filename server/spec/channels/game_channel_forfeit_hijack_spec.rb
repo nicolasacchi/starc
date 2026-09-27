@@ -34,8 +34,12 @@ RSpec.describe GameChannel, "and the connections behind it" do
 
   before do
     stub_const("Starc::MatchRunner::FORFEIT_GRACE_MS", grace_ms)
-    reset_registry!
+    # Stop before the reset: `reset_registry!` empties the registry without
+    # stopping the tick threads, so calling it first would make the
+    # `stop_all!` a no-op and let a runner inherited from an earlier file keep
+    # broadcasting into this example's fresh test adapter.
     Starc::MatchRunner.stop_all!
+    reset_registry!
     @previous_pubsub = ActionCable.server.instance_variable_get(:@pubsub)
     @pubsub = ActionCable::SubscriptionAdapter::Test.new(ActionCable.server)
     ActionCable.server.instance_variable_set(:@pubsub, @pubsub)
