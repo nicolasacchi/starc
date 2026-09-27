@@ -12,6 +12,8 @@
  * `{identifier, message}`.
  */
 import { describe, expect, it } from "vitest";
+import { GameConnection } from "./gameConnection";
+import { LobbyClient } from "./lobbyClient";
 import {
   CableMessageReader,
   CableTransport,
@@ -70,6 +72,11 @@ class FakeWebSocket {
   written(): Record<string, unknown>[] {
     return this.sent.map((text) => JSON.parse(text) as Record<string, unknown>);
   }
+}
+
+/** The socket the transport is currently driving. */
+function latestSocket(): FakeWebSocket {
+  return FakeWebSocket.last as unknown as FakeWebSocket;
 }
 
 function makeTransport(options: { heartbeatMs?: number } = {}) {
@@ -182,11 +189,160 @@ describe("handshake", () => {
     expect(ws.url).toBe(`${URL}?token=session-token`);
   });
 
+  it("gives a second caller the outcome of a handshake already in flight", async () => {
+    const { transport, socket } = makeTransport();
+    const first = transport.connect(URL, TOKEN);
+    const second = transport.connect(URL, TOKEN);
+    socket().upgrade();
+    socket().receive(JSON.stringify({ type: "welcome" }));
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it("rejects every caller when the handshake in flight fails", async () => {
+    const { transport, socket } = makeTransport();
+    const first = transport.connect(URL, TOKEN);
+    const second = transport.connect(URL, TOKEN);
+    socket().drop();
+    await expect(first).rejects.toThrow(/before welcome/);
+    await expect(second).rejects.toThrow(/before welcome/);
+  });
+
   it("rejects when the socket dies before welcome", async () => {
     const { transport, socket } = makeTransport();
     const promise = transport.connect(URL, TOKEN);
     socket().drop();
     await expect(promise).rejects.toThrow(/before welcome/);
+  });
+});
+
+describe("a shared transport", () => {
+
+  /** What a transport looks like to a lobby client and a game connection. */
+  it("tells a second consumer the cable is already open", async () => {
+    const { transport, socket } = makeTransport();
+    const states: string[] = [];
+    transport.onStateChange((s) => states.push(s));
+    const first = transport.connect(URL, TOKEN);
+    socket().upgrade();
+    socket().receive(JSON.stringify({ type: "welcome" }));
+    await first;
+    expect(states).toEqual(["connecting", "connected"]);
+
+    // The second consumer joins an open cable: no new socket, but the level is
+    // re-emitted so the caller learns the connection is live.
+    socket().upgrade();
+    await transport.connect(URL, TOKEN);
+    expect(states).toEqual(["connecting", "connected", "connected"]);
+    expect(transport.connected).toBe(true);
+  });
+
+  it("replays every live subscription when the socket comes back", async () => {
+    const { transport, ws } = await connected();
+    transport.subscribe(lobbyParams());
+    transport.subscribe(gameParams(12));
+    ws.drop();
+
+    // A second consumer (or the same one, reconnecting) opens a new socket.
+    const promise = transport.connect(URL, TOKEN);
+    const fresh = latestSocket();
+    fresh.upgrade();
+    fresh.receive(JSON.stringify({ type: "welcome" }));
+    await promise;
+    expect(fresh.written()).toEqual([
+      { command: "subscribe", identifier: LOBBY_ID },
+      { command: "subscribe", identifier: GAME_ID },
+    ]);
+  });
+
+  it("holds a message across a reconnect until the replayed subscribe is confirmed", async () => {
+    const { transport, ws } = await connected();
+    transport.subscribe(gameParams(12));
+    ws.receive(JSON.stringify({ type: "confirm_subscription", identifier: GAME_ID }));
+    ws.drop();
+
+    const promise = transport.connect(URL, TOKEN);
+    const fresh = latestSocket();
+    fresh.upgrade();
+    fresh.receive(JSON.stringify({ type: "welcome" }));
+    await promise;
+    // The confirmation is gone with the socket, so a message waits again: the
+    // replayed subscribe is the only thing on the wire.
+    transport.send({ v: 1, t: "game:command", id: "b1", from_tick: 840, commands: [] });
+    expect(fresh.written().map((f) => f.command)).toEqual(["subscribe"]);
+    fresh.receive(JSON.stringify({ type: "confirm_subscription", identifier: GAME_ID }));
+    expect(fresh.written().at(-1)).toMatchObject({ command: "message" });
+  });
+});
+
+describe("a shared cable in a real app", () => {
+  it("leaves both consumers subscribed and identified", async () => {
+    const transport = new CableTransport({
+      heartbeatMs: 0,
+      socketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+    });
+    const lobby = new LobbyClient({ transport });
+    const game = new GameConnection({ url: URL, token: TOKEN, transport, playerId: 7 });
+
+    // The lobby opens the cable first...
+    const opening = transport.connect(URL, TOKEN);
+    const ws = latestSocket();
+    ws.upgrade();
+    ws.receive(JSON.stringify({ type: "welcome" }));
+    await opening;
+    lobby.subscribe();
+
+    // ...and the match screen is the second consumer of that same cable. This
+    // used to resolve without any notification, so the game channel was never
+    // joined and the client waited forever for a game:start that could not come.
+    await game.connect(12);
+    game.start();
+    const sent = ws.written().map((f) => f.identifier ?? f.command);
+    expect(sent).toContain(LOBBY_ID);
+    expect(sent).toContain(GAME_ID);
+    // One subscribe per channel, not one per call.
+    expect(sent.filter((s) => s === GAME_ID)).toHaveLength(1);
+    // identify waits for the game subscription to be confirmed, exactly like
+    // every other message on that channel.
+    ws.receive(JSON.stringify({ type: "confirm_subscription", identifier: GAME_ID }));
+    expect(ws.written().some((f) => f.command === "message" && String(f.data).includes('"identify"'))).toBe(true);
+
+    ws.receive(
+      JSON.stringify({
+        identifier: GAME_ID,
+        message: JSON.stringify({
+          v: 1,
+          t: "game:start",
+          match_id: 12,
+          seed: 1,
+          map_id: "altaior",
+          tick_rate: 20,
+          snapshot_rate: 10,
+          countdown_ms: 0,
+          players: [{ player_id: 7, slot: 0, race: "terran", name: "nik", team: 1, start: { x: 32, z: 32 } }],
+        }),
+      }),
+    );
+    expect(game.state).toBe("running");
+  });
+
+  it("does not take the lobby's subscription down when the match ends", async () => {
+    const transport = new CableTransport({
+      heartbeatMs: 0,
+      socketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+    });
+    const game = new GameConnection({ url: URL, token: TOKEN, transport, playerId: 7 });
+    const opening = transport.connect(URL, TOKEN);
+    const ws = latestSocket();
+    ws.upgrade();
+    ws.receive(JSON.stringify({ type: "welcome" }));
+    await opening;
+    await game.connect(12);
+
+    game.disconnect();
+    const unsubscribed = ws.written().filter((f) => f.command === "unsubscribe").map((f) => f.identifier);
+    // The match screen leaves; the lobby browser keeps its channel.
+    expect(unsubscribed).toEqual([GAME_ID]);
+    expect(transport.state).not.toBe("closed");
   });
 });
 
@@ -443,7 +599,7 @@ describe("lifecycle", () => {
     transport.close();
 
     const promise = transport.connect(URL, TOKEN);
-    const fresh = socket();
+    const fresh = latestSocket();
     fresh.upgrade();
     fresh.receive(JSON.stringify({ type: "welcome" }));
     await promise;

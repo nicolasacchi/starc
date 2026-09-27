@@ -182,6 +182,9 @@ export class GameConnection {
   private readonly outbound: UnacknowledgedCommand[] = [];
   private rateWindowStartMs = 0;
   private rateWindowCount = 0;
+  /** What this connection has subscribed, so a repeat is a no-op. */
+  private lobbySubscribed = false;
+  private subscribedMatchId: number | null = null;
 
   constructor(options: GameConnectionOptions) {
     this.url = options.url;
@@ -308,6 +311,14 @@ export class GameConnection {
       // The transport already reported why; back off and try again.
       this.setState("reconnecting");
       this.reconnect.notifyLoss();
+      return;
+    }
+    // The cable may already have been open — by the lobby, or by a previous
+    // attempt — in which case there was no `connected` transition to react to.
+    // Ask for the subscription outright rather than hope one arrives.
+    if (this.transport.connected) {
+      this.subscribeAll();
+      this.setState("waiting");
     }
   }
 
@@ -362,8 +373,12 @@ export class GameConnection {
     this.reconnect.stop();
     this.cancelFlush();
     this.cancelCountdown();
+    // Only our own subscription: the transport is shared with the lobby, and
+    // unsubscribing the lobby channel here would take the match browser down
+    // with us. Read it before `forgetWorld` clears the bookkeeping.
+    const leaving = this.subscribedMatchId;
     this.forgetWorld();
-    this.transport.unsubscribe(lobbyParams());
+    if (leaving !== null) this.transport.unsubscribe(gameParams(leaving));
     if (this.ownsTransport) this.transport.close();
     this.started = false;
     this.setState("closed");
@@ -535,10 +550,22 @@ export class GameConnection {
 
   /* -------------------------------------------------------------- outbound */
 
+  /**
+   * Subscribes to what this connection needs and identifies on the game
+   * channel. Idempotent: the transport is shared with the lobby, the transport
+   * replays subscriptions on every welcome, and `connect()` may be called on an
+   * already-open cable — so this must be safe to call again rather than
+   * sending a second subscribe for the same identifier.
+   */
   private subscribeAll(): void {
-    this.transport.subscribe(lobbyParams());
-    if (this.currentMatchId === null) return;
-    const params = gameParams(this.currentMatchId);
+    if (!this.lobbySubscribed) {
+      this.lobbySubscribed = true;
+      this.transport.subscribe(lobbyParams());
+    }
+    const matchId = this.currentMatchId;
+    if (matchId === null || this.subscribedMatchId === matchId) return;
+    this.subscribedMatchId = matchId;
+    const params = gameParams(matchId);
     this.transport.subscribe(params);
     this.transport.identify(params);
   }
@@ -728,6 +755,8 @@ export class GameConnection {
   }
 
   private forgetWorld(): void {
+    this.subscribedMatchId = null;
+    this.lobbySubscribed = false;
     this.snapshots.clear();
     this.interpolator.reset();
     this.predictor?.reset();

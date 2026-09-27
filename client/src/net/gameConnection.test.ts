@@ -27,6 +27,8 @@ const ME = 1;
 
 class FakeTransport implements ChannelTransport {
   state: TransportState = "idle";
+  /** Level, not an edge: a second consumer reads this instead of a transition. */
+  connected = false;
   readonly sent: ClientMessage[] = [];
   readonly subscribed: string[] = [];
   readonly unsubscribed: string[] = [];
@@ -41,6 +43,7 @@ class FakeTransport implements ChannelTransport {
 
   connect = async (_url: string, _token: string): Promise<void> => {
     this.connectCalls++;
+    this.connected = true;
     this.setState("connected");
   };
 
@@ -84,6 +87,7 @@ class FakeTransport implements ChannelTransport {
 
   close = (): void => {
     this.closed = true;
+    this.connected = false;
     this.setState("closed");
   };
 

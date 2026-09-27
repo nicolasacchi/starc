@@ -94,6 +94,12 @@ export interface ChannelTransport extends Transport {
   lastActivity(): number;
   /** The server asked us to close. Terminal when `reconnect` is false. */
   onDisconnect(handler: (info: ServerDisconnect) => void): void;
+  /**
+   * True once the server has welcomed this connection. This is a *level*, not
+   * an edge: a consumer that arrives late can read it instead of waiting for a
+   * transition that already happened.
+   */
+  readonly connected: boolean;
 }
 
 export const LOBBY_CHANNEL = "LobbyChannel";
@@ -250,6 +256,8 @@ export class CableTransport implements ChannelTransport {
   /** Subscriptions and messages issued before `welcome`, replayed in order. */
   private outbox: string[] = [];
   private welcomed = false;
+  /** The in-flight (or settled) handshake, shared by every caller. */
+  private connectPromise: Promise<void> | null = null;
   private closeRequested = false;
   private serverClosed = false;
   private heartbeatTimer: number | null = null;
@@ -279,10 +287,27 @@ export class CableTransport implements ChannelTransport {
     return this.serverClosed;
   }
 
-  /** Resolves on the ActionCable `welcome`, not on the TCP upgrade. */
+  get connected(): boolean {
+    return this.currentState === "connected" && this.welcomed;
+  }
+
+  /**
+   * Opens the cable, or joins the one already open.
+   *
+   * A shared transport has several consumers, and only the first one to call
+   * this can see a state *transition* — so a later `connect()` resolves
+   * immediately and re-emits the current level to the state handlers. Without
+   * that, a second consumer would wait forever for a `connected` edge that had
+   * already fired, and would never subscribe. A call made mid-handshake joins
+   * that attempt and shares its promise, so success *and* failure reach every
+   * caller rather than the first one.
+   */
   connect(url: string, token: string): Promise<void> {
-    if (this.currentState === "connected" && this.welcomed) return Promise.resolve();
-    if (this.currentState === "connecting" && this.socket) return Promise.resolve();
+    if (this.connected) {
+      this.notifyState();
+      return Promise.resolve();
+    }
+    if (this.connectPromise) return this.connectPromise;
     this.token = token;
     this.closeRequested = false;
     this.serverClosed = false;
@@ -290,7 +315,7 @@ export class CableTransport implements ChannelTransport {
     this.reader.reset();
     this.setState(this.currentState === "reconnecting" ? "reconnecting" : "connecting");
 
-    return new Promise<void>((resolve, reject) => {
+    this.connectPromise = new Promise<void>((resolve, reject) => {
       this.connectResolve = resolve;
       this.connectReject = reject;
 
@@ -298,6 +323,7 @@ export class CableTransport implements ChannelTransport {
       try {
         socket = this.socketFactory(cableUrl(url, token));
       } catch (err) {
+        this.connectPromise = null;
         this.setState("closed");
         reject(err instanceof Error ? err : new Error(String(err)));
         return;
@@ -309,6 +335,7 @@ export class CableTransport implements ChannelTransport {
       socket.onerror = () => this.raise(new Error("cable socket error"));
       socket.onclose = (ev: CloseEvent) => this.onClose(ev);
     });
+    return this.connectPromise;
   }
 
   onMessage(handler: (msg: ServerMessage) => void): void {
@@ -341,7 +368,10 @@ export class CableTransport implements ChannelTransport {
     this.subscriptions.set(identifier, params);
     this.sentAt.set(identifier, Date.now());
     this.confirmed.delete(identifier);
-    this.write({ command: "subscribe", identifier });
+    // Queued rather than written: the welcome replay sends every live
+    // subscription in order, which is what keeps a subscribe from overtaking
+    // the message that needs it.
+    if (this.welcomed) this.writeRaw(JSON.stringify({ command: "subscribe", identifier }));
     return identifier;
   }
 
@@ -457,6 +487,13 @@ export class CableTransport implements ChannelTransport {
     this.connectResolve?.();
     this.connectResolve = null;
     this.connectReject = null;
+    // ActionCable forgets every subscription when the socket drops, and the
+    // gem's own client re-sends them on the next welcome. So do we: a reconnect
+    // must leave *both* consumers of a shared cable subscribed, not just
+    // whichever one happened to notice.
+    for (const identifier of this.subscriptions.keys()) {
+      this.writeRaw(JSON.stringify({ command: "subscribe", identifier }));
+    }
     // Anything queued while the connection was opening goes out now, in order,
     // so a subscribe still precedes the message that needs it.
     const queued = this.outbox;
@@ -519,6 +556,10 @@ export class CableTransport implements ChannelTransport {
   private onClose(ev: CloseEvent): void {
     const wasWelcomed = this.welcomed;
     this.welcomed = false;
+    // The server has forgotten every subscription, so nothing is confirmed any
+    // more: a message must wait for the replayed subscribe to come back.
+    this.confirmed.clear();
+    this.connectPromise = null;
     if (this.connectReject) {
       const err = new Error(`cable closed before welcome (code ${ev.code})`);
       this.connectReject(err);
@@ -590,12 +631,22 @@ export class CableTransport implements ChannelTransport {
     if (socket && (socket.readyState === 0 || socket.readyState === 1)) socket.close();
     this.socket = null;
     this.welcomed = false;
+    this.connectPromise = null;
     this.subscriptions.clear();
     this.sentAt.clear();
     this.confirmed.clear();
     this.pendingMessages.clear();
     this.outbox.length = 0;
     this.setState("closed");
+  }
+
+  /**
+   * Re-emits the current level to the state handlers without changing it, so a
+   * consumer that joins an open cable learns the state rather than waiting for
+   * an edge that already fired.
+   */
+  private notifyState(): void {
+    for (const handler of this.stateHandlers) handler(this.currentState);
   }
 
   private setState(state: TransportState): void {
