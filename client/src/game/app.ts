@@ -33,7 +33,7 @@ import { GameConnection } from "@net/gameConnection";
 import type { GameRejectionEvent, GameSnapshotMessage, GameStartMessage } from "@net/gameConnection";
 import { LobbyClient } from "@net/lobbyClient";
 import type { LobbyFilters, LobbyState } from "@net/lobbyClient";
-import { StompTransport } from "@net/transport";
+import { CableTransport } from "@net/transport";
 import type { ChannelTransport } from "@net/transport";
 import { MAX_ZOOM, MIN_ZOOM } from "@render/core/camera";
 import { detectQuality, setForcedQuality, settingsFor } from "@render/core/quality";
@@ -200,7 +200,7 @@ export class App implements UiHost {
   constructor(options: AppOptions = {}) {
     this.opts = options;
     this.api = options.api ?? new ApiClient();
-    this.transport = options.transport ?? new StompTransport();
+    this.transport = options.transport ?? new CableTransport();
     this.auth = new AuthService(this.api);
     this.lobby = new LobbyClient({ transport: this.transport });
     this.notifier = new Notifier();

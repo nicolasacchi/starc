@@ -16,8 +16,8 @@ import type {
   GameStartMessage,
   GameSnapshotMessage,
 } from "./gameConnection";
-import { gameChannelFor, LOBBY_CHANNEL } from "./transport";
-import type { ChannelTransport, TransportState } from "./transport";
+import { channelIdentifier, gameParams, lobbyParams } from "./transport";
+import type { ChannelParams, ChannelTransport, ServerDisconnect, TransportState } from "./transport";
 import type { ClientMessage, Command, ProtocolEntity, ServerMessage } from "@shared/protocol";
 
 const URL = "wss://cable.example.test/cable";
@@ -66,17 +66,20 @@ class FakeTransport implements ChannelTransport {
 
   lastActivity = (): number => 0;
 
-  subscribe(channel: string): string {
-    this.subscribed.push(channel);
-    return `sub-${this.subscribed.length}`;
+  /** A server-requested close. The fake never triggers one on its own. */
+  onDisconnect = (_handler: (info: ServerDisconnect) => void): void => {};
+
+  subscribe(params: ChannelParams): string {
+    this.subscribed.push(JSON.stringify(params));
+    return JSON.stringify(params);
   }
 
-  unsubscribe(channel: string): void {
-    this.unsubscribed.push(channel);
+  unsubscribe(params: ChannelParams): void {
+    this.unsubscribed.push(JSON.stringify(params));
   }
 
-  identify(channel?: string): void {
-    this.identified.push(channel ?? "");
+  identify(params?: ChannelParams): void {
+    this.identified.push(params ? JSON.stringify(params) : "");
   }
 
   close = (): void => {
@@ -200,9 +203,9 @@ describe("GameConnection", () => {
     it("subscribes to the lobby and the match, then identifies", async () => {
       await connection.connect(MATCH);
 
-      expect(transport.subscribed).toEqual([LOBBY_CHANNEL, gameChannelFor(MATCH)]);
+      expect(transport.subscribed).toEqual([channelIdentifier(lobbyParams()), channelIdentifier(gameParams(MATCH))]);
       // identify must precede every other message on the channel.
-      expect(transport.identified).toEqual([gameChannelFor(MATCH)]);
+      expect(transport.identified).toEqual([channelIdentifier(gameParams(MATCH))]);
       expect(connection.state).toBe("waiting");
       expect(connection.matchId).toBe(MATCH);
     });
@@ -482,7 +485,7 @@ describe("GameConnection", () => {
       transport.setState("reconnecting");
       await timer.fireAll();
 
-      expect(transport.subscribed).toContain(gameChannelFor(MATCH));
+      expect(transport.subscribed).toContain(channelIdentifier(gameParams(MATCH)));
       expect(connection.state).toBe("waiting");
     });
   });

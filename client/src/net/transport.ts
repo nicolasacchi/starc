@@ -1,28 +1,43 @@
 /**
- * ActionCable STOMP transport, written from scratch.
+ * ActionCable cable transport, written from scratch against the protocol the
+ * server actually speaks: `actioncable-8.1.4`'s **native JSON protocol**. That
+ * gem has no STOMP support at all — a STOMP `CONNECT` frame is ignored and the
+ * server answers with `{"type":"welcome"}` — so this file frames every message
+ * as one JSON document per WebSocket text frame. No `@rails/actioncable`, no
+ * `@stompjs`, no new dependencies.
  *
- * ActionCable's own JS client is JSON-over-`actioncable-v1-json`, not STOMP, so
- * what this file implements is the raw STOMP 1.2 framing that an ActionCable
- * server speaks on the same `wss://<host>/cable` socket. Everything is
- * hand-rolled — no `@rails/actioncable`, no `@stompjs`.
+ * The handshake, end to end:
  *
- * Frame grammar (STOMP 1.2):
+ * ```
+ * ws://host/cable?token=<session>      Upgrade: websocket, no subprotocol
+ * ← {"type":"welcome"}                 the connection is open; only now may we subscribe
+ * → {"command":"subscribe","identifier":"{\"channel\":\"LobbyChannel\"}"}
+ * ← {"type":"confirm_subscription","identifier":"…"}
+ * → {"command":"message","identifier":"…","data":"{\"v\":1,\"t\":\"lobby:list\"}"}
+ * ← {"identifier":"…","message":"{\"v\":1,\"t\":\"lobby:state\",…}"}
+ * ```
  *
- *   COMMAND EOL (header ':' value EOL)* EOL body NUL
+ * Three details that are easy to get wrong and expensive to debug:
  *
- * - A server frame *must* end with NUL and *should* use CRLF; a client frame
- *   *must* use LF. We accept both line endings inbound and always emit LF.
- * - A bare EOL (`\n` or `\r\n`) with no command byte is a heart-beat. Receiving
- *   one obliges an immediate EOL back or the server drops the connection.
- * - `content-length` makes the body length authoritative, and the terminator
- *   after it may be a NUL or a line break. Without it we scan for the NUL.
- * - Header values escape `\`, `:` and newline as `\\`, `\c`, `\n`; the first
- *   *unescaped* colon separates name from value, so a value may itself contain
- *   colons (relevant for server-generated `message-id` / `receipt-id`).
+ * - `identifier` is a **JSON-encoded string** of the channel params, not a
+ *   channel name. Server frames are routed by matching that string exactly; a
+ *   frame for an identifier we do not hold is dropped.
+ * - The `data` we send is itself a JSON **string**, and a server payload that
+ *   arrives as `message` may be a string (a Ruby `to_json` transmit) or an
+ *   already-decoded object. Both are accepted.
+ * - `{"type":"disconnect","reconnect":false}` is a *server-requested* close.
+ *   It is terminal: the client must not reconnect, because the server will
+ *   refuse the same connection again. That is why it is reported separately
+ *   from a socket drop instead of looking like one.
  *
- * Channel mapping: `lobby` and `game:<match_id>` (PROTOCOL.md §1–§2) become
- * STOMP `destination` headers. The payload of every `MESSAGE` is a protocol
- * `ServerMessage` (§2–§5) parsed as JSON and handed to `onMessage`.
+ * `ping` is fire-and-forget: the gem's own client records it and sends nothing
+ * back. So do we — it feeds `lastActivity()`, which is what the reconnect
+ * controller and the connection-quality indicator read. If the socket goes
+ * silent past three heartbeat windows, it is closed so the normal reconnect
+ * path takes over.
+ *
+ * The WebSocket layer reassembles a *JSON document* that arrives in pieces,
+ * which a proxy or an extension frame boundary can cause.
  */
 import { isServerMessage, PROTOCOL_VERSION } from "@shared/protocol";
 import type { ClientMessage, ServerMessage } from "@shared/protocol";
@@ -38,251 +53,220 @@ export interface Transport {
   close(): void;
 }
 
-/** One decoded STOMP frame; `command === ""` marks a heart-beat. */
-export interface StompFrame {
-  command: string;
-  headers: Map<string, string>;
-  body: string;
+/**
+ * Channel subscription parameters, exactly as they are JSON-encoded into the
+ * ActionCable `identifier`. `LobbyChannel` takes none; `GameChannel` takes
+ * `match_id` (see `server/app/channels/*.rb`).
+ */
+export interface ChannelParams {
+  channel: string;
+  [key: string]: string | number;
 }
 
-export interface StompTransportOptions {
-  /** Heart-beat cadence in ms. 0 disables the outbound liveness timer. */
-  heartbeatMs?: number;
-  /** WebSocket subprotocols to request. */
-  protocols?: string | string[];
-  /** Observability hook, invoked for every decoded frame. */
-  onFrame?: (frame: StompFrame) => void;
+/** What the server asked for when it sent `{"type":"disconnect"}`. */
+export interface ServerDisconnect {
+  reason: string;
+  /** False means terminal: do not reconnect. */
+  reconnect: boolean;
 }
-
-/** PROTOCOL.md §2: the lobby channel is a fixed name; gameplay is per match. */
 
 /**
- * What the game and lobby clients need on top of the bare {@link Transport}:
- * channel subscription, `identify`, error reporting, and STOMP receipts for
- * round-trip measurement.
+ * What the rest of the slice needs on top of the bare {@link Transport}:
+ * channel subscription, `identify`, error reporting, round-trip measurement
+ * and a distinct hook for a server-requested close.
  */
 export interface ChannelTransport extends Transport {
-  /** Subscribes to a channel and returns its STOMP subscription id. */
-  subscribe(channel: string): string;
-  /** Drops a subscription; the server then stops sending to this client. */
-  unsubscribe(channel: string): void;
-  /** Sends `identify` on a game channel (PROTOCOL.md §1). */
-  identify(channel?: string): void;
+  /** Subscribes with channel params; returns the ActionCable identifier. */
+  subscribe(params: ChannelParams): string;
+  /** Drops a subscription; the server stops sending to this client. */
+  unsubscribe(params: ChannelParams): void;
+  /** Sends `identify` on a game subscription (PROTOCOL.md §1). */
+  identify(params?: ChannelParams): void;
   /** Non-fatal problems: protocol violations, unparsable frames. */
   onError(handler: (err: Error) => void): void;
   /**
-   * A frame carrying `receipt` was acknowledged. The handler gets the receipt
-   * id and both timestamps, so the caller can derive a round-trip time without
-   * the transport having to guess a clock.
+   * A subscribe was confirmed (or rejected) by the server. Both timestamps
+   * come from this transport, so the handler derives a true round-trip time
+   * across the same socket gameplay uses.
    */
-  onReceipt(handler: (receiptId: string, sentAtMs: number, receivedAtMs: number) => void): void;
-  /** Local timestamp of the last inbound byte. */
+  onReceipt(handler: (id: string, sentAtMs: number, receivedAtMs: number) => void): void;
+  /** Local timestamp of the last inbound frame — liveness. */
   lastActivity(): number;
+  /** The server asked us to close. Terminal when `reconnect` is false. */
+  onDisconnect(handler: (info: ServerDisconnect) => void): void;
 }
 
-export const LOBBY_CHANNEL = "lobby";
-export const GAME_CHANNEL_PREFIX = "game:";
+export const LOBBY_CHANNEL = "LobbyChannel";
+export const GAME_CHANNEL = "GameChannel";
 
-/** Gameplay channel name for a match id. */
-export function gameChannelFor(matchId: number): string {
-  return GAME_CHANNEL_PREFIX + matchId;
+/** Channel params for the match browser. */
+export function lobbyParams(): ChannelParams {
+  return { channel: LOBBY_CHANNEL };
 }
 
-/** True when a channel name addresses the match browser rather than a match. */
-export function isLobbyChannel(channel: string): boolean {
-  return channel === LOBBY_CHANNEL;
+/** Channel params for one match. */
+export function gameParams(matchId: number): ChannelParams {
+  return { channel: GAME_CHANNEL, match_id: matchId };
 }
 
-const NUL = "\0";
-/** Queued-outbound cap; a client that queues this much is already wedged. */
-const MAX_OUTBOX = 256;
-/** In-flight receipts tracked for round-trip measurement. */
-const MAX_TRACKED_RECEIPTS = 256;
-/** How long a graceful close waits for the server's DISCONNECT receipt, ms. */
-const DISCONNECT_GRACE_MS = 250;
-
-
-function escapeHeaderValue(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/:/g, "\\c").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+/** The JSON-encoded ActionCable identifier for a set of channel params. */
+export function channelIdentifier(params: ChannelParams): string {
+  return JSON.stringify(params);
 }
 
-function unescapeHeaderValue(value: string): string {
-  let out = "";
-  for (let i = 0; i < value.length; i++) {
-    const ch = value[i];
-    if (ch !== "\\") {
-      out += ch;
-      continue;
-    }
-    const next = value[++i];
-    if (next === "c") out += ":";
-    else if (next === "n") out += "\n";
-    else if (next === "r") out += "\r";
-    else if (next === "\\") out += "\\";
-    else out += next ?? "";
-  }
-  return out;
-}
+const WELCOME = "welcome";
+const PING = "ping";
+const CONFIRM_SUBSCRIPTION = "confirm_subscription";
+const REJECTION = "rejection";
+const DISCONNECT = "disconnect";
 
-/** Splits one header line on its first *unescaped* colon. */
-function parseHeaderLine(line: string): [string, string] | null {
-  for (let i = 0; i < line.length; i++) {
-    if (line[i] === "\\") {
-      i++; // an escaped character can never be the separator
-      continue;
-    }
-    if (line[i + 1] === ":") {
-      return [line.slice(0, i + 1), unescapeHeaderValue(line.slice(i + 2))];
-    }
-  }
-  return null;
+/** One decoded cable frame. */
+export interface CableFrame {
+  type: string;
+  identifier?: string;
+  message?: unknown;
+  reason?: string;
+  reconnect?: boolean;
+  data?: unknown;
+  command?: string;
 }
 
 /**
- * Incremental STOMP frame reader. Feed it socket text; it returns whatever
- * whole frames have arrived. Holds one string buffer that is bounded by
- * {@link MAX_BUFFER} so a desynchronised stream cannot grow without limit.
+ * Reassembles cable frames from socket text. The WebSocket layer normally
+ * hands over whole messages, but a text frame can still arrive in pieces
+ * behind a proxy; incomplete documents are buffered rather than dropped, and
+ * the buffer is bounded so a desynchronised stream cannot grow without limit.
  */
-export class StompFrameParser {
+export class CableMessageReader {
   private buffer = "";
   private static readonly MAX_BUFFER = 1 << 20;
 
-  push(chunk: string): StompFrame[] {
+  /** Feeds socket text; returns the frames that are now complete. */
+  push(chunk: string): CableFrame[] {
     this.buffer += chunk;
-    const frames: StompFrame[] = [];
+    const frames: CableFrame[] = [];
     for (;;) {
-      if (this.buffer.length === 0) break;
-
-      // Heart-beat: a leading EOL with no command byte in front of it.
-      if (this.buffer[0] === "\n" || this.buffer[0] === "\r") {
-        const width = this.buffer[0] === "\r" && this.buffer[1] === "\n" ? 2 : 1;
-        this.buffer = this.buffer.slice(width);
-        frames.push({ command: "", headers: new Map(), body: "" });
-        continue;
-      }
-
-      const frame = this.takeFrame();
-      if (!frame) break;
-      frames.push(frame);
+      const end = this.endOfFirstDocument();
+      if (end < 0) break;
+      const text = this.buffer.slice(0, end + 1);
+      this.buffer = this.buffer.slice(end + 1);
+      const frame = parseFrame(text);
+      if (frame) frames.push(frame);
     }
-    if (this.buffer.length > StompFrameParser.MAX_BUFFER) this.buffer = "";
+    if (this.buffer.length > CableMessageReader.MAX_BUFFER) this.buffer = "";
     return frames;
   }
 
-  /** Resets the reader, e.g. after a reconnect. */
+  /** Bytes still waiting for the rest of a document. */
+  get pending(): number {
+    return this.buffer.length;
+  }
+
   reset(): void {
     this.buffer = "";
   }
 
-  private takeFrame(): StompFrame | null {
-    // Headers end at the first blank line; the body runs to NUL (or to the
-    // declared content-length, which wins because it is unambiguous).
-    let headerEnd = -1;
-    let separatorWidth = 2;
+  /**
+   * Index of the closing brace of the first complete JSON object, or -1.
+   * String-aware, so a `}` inside a message payload does not end the frame.
+   */
+  private endOfFirstDocument(): number {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let started = false;
     for (let i = 0; i < this.buffer.length; i++) {
-      if (this.buffer[i] !== "\n") continue;
-      if (this.buffer[i + 1] === "\n") {
-        headerEnd = i;
-        separatorWidth = 2;
-        break;
+      const ch = this.buffer[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
       }
-      if (this.buffer[i + 1] === "\r" && this.buffer[i + 2] === "\n") {
-        headerEnd = i;
-        separatorWidth = 3;
-        break;
+      if (ch === '"') {
+        inString = true;
+        continue;
       }
+      if (ch === "{") {
+        depth++;
+        started = true;
+        continue;
+      }
+      if (ch !== "}") continue;
+      depth--;
+      if (started && depth === 0) return i;
     }
-    if (headerEnd < 0) return null;
-
-    const headerText = this.buffer.slice(0, headerEnd);
-    const bodyStart = headerEnd + separatorWidth;
-    const commandEnd = headerText.indexOf("\n");
-    const command = (commandEnd < 0 ? headerText : headerText.slice(0, commandEnd)).replace(/\r$/, "");
-
-    const headers = new Map<string, string>();
-    if (commandEnd >= 0) {
-      for (const raw of headerText.slice(commandEnd + 1).split("\n")) {
-        const line = raw.replace(/\r$/, "");
-        if (line === "") continue;
-        const parsed = parseHeaderLine(line);
-        if (parsed) headers.set(parsed[0], parsed[1]);
-      }
-    }
-
-    const declared = headers.get("content-length");
-    if (declared !== undefined) {
-      const length = Number.parseInt(declared, 10);
-      if (!Number.isFinite(length) || length < 0) {
-        // Unusable length: drop the frame rather than desynchronise the stream.
-        this.buffer = this.buffer.slice(bodyStart);
-        return { command, headers, body: "" };
-      }
-      if (this.buffer.length - bodyStart < length) return null;
-      const body = this.buffer.slice(bodyStart, bodyStart + length);
-      let consumed = bodyStart + length;
-      if (this.buffer[consumed] === "\r" && this.buffer[consumed + 1] === "\n") consumed += 2;
-      else if (this.buffer[consumed] === "\n" || this.buffer[consumed] === NUL) consumed += 1;
-      this.buffer = this.buffer.slice(consumed);
-      return { command, headers, body };
-    }
-
-    const nul = this.buffer.indexOf(NUL, bodyStart);
-    if (nul < 0) return null;
-    const body = this.buffer.slice(bodyStart, nul);
-    this.buffer = this.buffer.slice(nul + 1);
-    return { command, headers, body };
+    return -1;
   }
 }
 
-/** Serialises a client frame. Client frames use LF and are NUL-terminated. */
-export function encodeStompFrame(command: string, headers: Record<string, string>, body = ""): string {
-  let out = command + "\n";
-  for (const key of Object.keys(headers)) out += `${key}:${escapeHeaderValue(headers[key])}\n`;
-  return out + "\n" + body + NUL;
+function parseFrame(text: string): CableFrame | null {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    return parsed as CableFrame;
+  } catch {
+    return null;
+  }
 }
 
-function hostOf(url: string): string {
-  const match = /^[a-z]+:\/\/([^/]+)/i.exec(url);
-  return match ? match[1] : url;
+export interface CableTransportOptions {
+  /**
+   * Liveness window in ms. A silent socket past three windows is closed so
+   * the reconnect path takes over. 0 disables the check.
+   */
+  heartbeatMs?: number;
+  /** WebSocket subprotocols. ActionCable negotiates none, so this is empty. */
+  protocols?: string | string[];
+  /** Observability hook, invoked for every decoded frame. */
+  onFrame?: (frame: CableFrame) => void;
+  /**
+   * The `WebSocket` constructor. Injectable so the transport can be driven
+   * without a live context, and so a test can hand it a fake socket.
+   */
+  socketFactory?: (url: string) => WebSocket;
 }
 
-export class StompTransport implements ChannelTransport {
+export class CableTransport implements ChannelTransport {
   private socket: WebSocket | null = null;
-  private parser = new StompFrameParser();
+  private reader = new CableMessageReader();
   private currentState: TransportState = "idle";
   private token = "";
-  private url = "";
-  /** Channel → subscription id, so MESSAGE frames can be routed back. */
-  private readonly subscriptions = new Map<string, string>();
-  /** Gameplay channel currently subscribed, if any. */
-  private gameChannel: string | null = null;
-  private nextSubscriptionId = 1;
-  private connected = false;
-  private closeRequested = false;
-  /** Frames issued before CONNECTED, replayed in order on the open socket. */
-  private outbox: string[] = [];
+  /** identifier → params, so an inbound frame routes to the right channel. */
+  private readonly subscriptions = new Map<string, ChannelParams>();
   private readonly messageHandlers: ((msg: ServerMessage) => void)[] = [];
   private readonly stateHandlers: ((s: TransportState) => void)[] = [];
   private readonly errorHandlers: ((err: Error) => void)[] = [];
-  private readonly receiptHandlers: ((receiptId: string, sentAtMs: number, receivedAtMs: number) => void)[] = [];
-  /** receipt id → the moment the frame carrying it was written. */
-  private readonly receiptsSent = new Map<string, number>();
-  /** Receipt awaited by {@link StompTransport.close}, or null. */
-  private closingReceipt: string | null = null;
-  private closeTimer: number | null = null;
-
+  private readonly receiptHandlers: ((id: string, sentAtMs: number, receivedAtMs: number) => void)[] = [];
+  private readonly disconnectHandlers: ((info: ServerDisconnect) => void)[] = [];
+  /** identifier → when the subscribe went out, for the round-trip measure. */
+  private readonly sentAt = new Map<string, number>();
+  /** Identifiers the server has confirmed. A `message` waits for one. */
+  private readonly confirmed = new Set<string>();
+  /** identifier → messages held until its subscription is confirmed. */
+  private readonly pendingMessages = new Map<string, string[]>();
+  /** Ceiling on held messages per channel, so a silent server cannot grow it. */
+  private static readonly MAX_PENDING_MESSAGES = 64;
+  /** Subscriptions and messages issued before `welcome`, replayed in order. */
+  private outbox: string[] = [];
+  private welcomed = false;
+  private closeRequested = false;
+  private serverClosed = false;
   private heartbeatTimer: number | null = null;
   private lastInboundAt = 0;
-  private pingOutstanding = false;
   private connectResolve: (() => void) | null = null;
   private connectReject: ((err: Error) => void) | null = null;
-  private readonly onFrameHook: ((frame: StompFrame) => void) | null;
+  private closeTimer: number | null = null;
+  private readonly onFrameHook: ((frame: CableFrame) => void) | null;
   private readonly heartbeatMs: number;
   private readonly protocols: string | string[];
+  private readonly socketFactory: (url: string) => WebSocket;
 
-  constructor(options: StompTransportOptions = {}) {
+  constructor(options: CableTransportOptions = {}) {
     this.heartbeatMs = options.heartbeatMs ?? 10_000;
-    this.protocols = options.protocols ?? "stomp";
+    this.socketFactory =
+      options.socketFactory ?? ((url: string) => (this.protocols ? new WebSocket(url, this.protocols) : new WebSocket(url)));
+    this.protocols = options.protocols ?? "";
     this.onFrameHook = options.onFrame ?? null;
   }
 
@@ -290,14 +274,20 @@ export class StompTransport implements ChannelTransport {
     return this.currentState;
   }
 
-  /** Resolves once the STOMP handshake reaches CONNECTED. */
+  /** True once the server has asked us to close and does not want a retry. */
+  get terminated(): boolean {
+    return this.serverClosed;
+  }
+
+  /** Resolves on the ActionCable `welcome`, not on the TCP upgrade. */
   connect(url: string, token: string): Promise<void> {
-    if (this.currentState === "connected") return Promise.resolve();
+    if (this.currentState === "connected" && this.welcomed) return Promise.resolve();
     if (this.currentState === "connecting" && this.socket) return Promise.resolve();
-    this.url = url;
     this.token = token;
     this.closeRequested = false;
-    this.parser.reset();
+    this.serverClosed = false;
+    this.welcomed = false;
+    this.reader.reset();
     this.setState(this.currentState === "reconnecting" ? "reconnecting" : "connecting");
 
     return new Promise<void>((resolve, reject) => {
@@ -306,7 +296,7 @@ export class StompTransport implements ChannelTransport {
 
       let socket: WebSocket;
       try {
-        socket = this.protocols ? new WebSocket(url, this.protocols) : new WebSocket(url);
+        socket = this.socketFactory(cableUrl(url, token));
       } catch (err) {
         this.setState("closed");
         reject(err instanceof Error ? err : new Error(String(err)));
@@ -329,193 +319,196 @@ export class StompTransport implements ChannelTransport {
     this.stateHandlers.push(handler);
   }
 
-  /** Non-fatal transport problems: protocol violations, unparsable frames. */
   onError(handler: (err: Error) => void): void {
     this.errorHandlers.push(handler);
   }
 
-  onReceipt(handler: (receiptId: string, sentAtMs: number, receivedAtMs: number) => void): void {
+  onReceipt(handler: (id: string, sentAtMs: number, receivedAtMs: number) => void): void {
     this.receiptHandlers.push(handler);
   }
 
-
-  /** Subscribes to a channel and returns its STOMP subscription id. */
-  subscribe(channel: string): string {
-    const id = `sub-${this.nextSubscriptionId++}`;
-    this.subscriptions.set(channel, id);
-    if (!isLobbyChannel(channel)) this.gameChannel = channel;
-    this.writeFrame(encodeStompFrame("SUBSCRIBE", { id, destination: channel, ack: "auto" }));
-    return id;
-  }
-
-  unsubscribe(channel: string): void {
-    const id = this.subscriptions.get(channel);
-    if (id === undefined) return;
-    this.subscriptions.delete(channel);
-    if (this.gameChannel === channel) this.gameChannel = null;
-    this.writeFrame(encodeStompFrame("UNSUBSCRIBE", { id }));
+  onDisconnect(handler: (info: ServerDisconnect) => void): void {
+    this.disconnectHandlers.push(handler);
   }
 
   /**
-   * `identify` must precede every other message on a `game:` channel
-   * (PROTOCOL.md §1); the server disconnects unidentified connections after
-   * 15 s of silence.
+   * Subscribes with channel params. The `subscribe` command is queued until the
+   * server has said `welcome`, because ActionCable drops a subscribe that
+   * arrives before the connection is open.
    */
-  identify(channel?: string): void {
-    const destination = channel ?? this.gameChannel;
-    if (!destination || isLobbyChannel(destination)) return;
-    this.writeFrame(
-      encodeStompFrame(
-        "SEND",
-        { destination, "content-type": "application/json;charset=utf-8" },
-        JSON.stringify({ v: PROTOCOL_VERSION, t: "identify", token: this.token }),
-      ),
-    );
+  subscribe(params: ChannelParams): string {
+    const identifier = channelIdentifier(params);
+    this.subscriptions.set(identifier, params);
+    this.sentAt.set(identifier, Date.now());
+    this.confirmed.delete(identifier);
+    this.write({ command: "subscribe", identifier });
+    return identifier;
+  }
+
+  unsubscribe(params: ChannelParams): void {
+    const identifier = channelIdentifier(params);
+    this.subscriptions.delete(identifier);
+    this.sentAt.delete(identifier);
+    this.confirmed.delete(identifier);
+    this.pendingMessages.delete(identifier);
+    this.write({ command: "unsubscribe", identifier });
   }
 
   /**
-   * Sends a protocol message to its natural channel with a STOMP `receipt`, so
-   * the server acknowledges receipt. The receipt id is the command id, giving a
-   * 1:1 mapping from a `RECEIPT` frame back to the batch it acknowledges.
+   * `identify` must precede any other message that needs a player
+   * (PROTOCOL.md §1). Defaults to the game subscription, which is the one that
+   * refuses to act without it.
+   */
+  identify(params?: ChannelParams): void {
+    const target = params ?? this.gameSubscription();
+    if (!target || target.channel !== GAME_CHANNEL) return;
+    this.write({
+      command: "message",
+      identifier: channelIdentifier(target),
+      data: JSON.stringify({ v: PROTOCOL_VERSION, t: "identify", token: this.token }),
+    });
+  }
+
+  /**
+   * Sends a protocol message on its natural channel. Lobby traffic goes to the
+   * lobby subscription, everything else to the game subscription; `data` is
+   * the protocol JSON, sent as a string because that is what ActionCable
+   * parses out of a `message` command.
    */
   send(message: ClientMessage): void {
-    const destination = isLobbyMessage(message) ? LOBBY_CHANNEL : this.gameChannel;
-    if (destination === null) {
-      this.raise(new Error(`no game channel subscribed for ${message.t}`));
+    const target = isLobbyMessage(message) ? this.lobbySubscription() : this.gameSubscription();
+    if (!target) {
+      this.raise(new Error(`no ${isLobbyMessage(message) ? "lobby" : "game"} subscription for ${message.t}`));
       return;
     }
-    const headers: Record<string, string> = {
-      destination,
-      "content-type": "application/json;charset=utf-8",
-    };
-    if ("id" in message && typeof message.id === "string") {
-      headers.receipt = message.id;
-      this.trackReceipt(message.id);
-    }
-    this.writeFrame(encodeStompFrame("SEND", headers, JSON.stringify(message)));
-
+    this.write({
+      command: "message",
+      identifier: channelIdentifier(target),
+      data: JSON.stringify(message),
+    });
   }
 
-  /**
-   * Sends `DISCONNECT` and closes. STOMP 1.2 asks the client to wait for the
-   * server's `RECEIPT` before dropping the socket, so a graceful close does
-   * not race the frame off the wire; a grace timer bounds the wait for a peer
-   * that never answers.
-   */
   close(): void {
     this.closeRequested = true;
-    this.stopHeartbeat();
-    const socket = this.socket;
-    if (socket && socket.readyState === 1) {
-      const receipt = `bye-${this.nextSubscriptionId++}`;
-      this.closingReceipt = receipt;
-      try {
-        socket.send(encodeStompFrame("DISCONNECT", { receipt }));
-      } catch {
-        // Socket already dying; the close below is what matters.
-      }
-      this.closeTimer = setTimeout(() => this.finishClose(), DISCONNECT_GRACE_MS) as unknown as number;
-      return;
-    }
     this.finishClose();
   }
 
-  private finishClose(): void {
-    this.stopHeartbeat();
-    if (this.closeTimer !== null) {
-      clearTimeout(this.closeTimer);
-      this.closeTimer = null;
-    }
-    const socket = this.socket;
-    if (socket && (socket.readyState === 0 || socket.readyState === 1)) socket.close();
-    this.socket = null;
-    this.connected = false;
-    this.subscriptions.clear();
-    this.gameChannel = null;
-    this.receiptsSent.clear();
-    this.closingReceipt = null;
-    this.outbox.length = 0;
-    this.setState("closed");
-  }
-
-  /** Timestamp of the last inbound byte; the reconnect controller's liveness. */
+  /** Timestamp of the last inbound frame; the reconnect controller's liveness. */
   lastActivity(): number {
     return this.lastInboundAt;
   }
 
   /* ------------------------------------------------------------- internals */
-  private trackReceipt(receiptId: string): void {
-    if (this.receiptsSent.size >= MAX_TRACKED_RECEIPTS) {
-      const oldest = this.receiptsSent.keys().next();
-      if (!oldest.done) this.receiptsSent.delete(oldest.value);
-    }
-    this.receiptsSent.set(receiptId, Date.now());
+
+  private lobbySubscription(): ChannelParams | null {
+    return this.subscriptionFor(LOBBY_CHANNEL);
   }
 
+  private gameSubscription(): ChannelParams | null {
+    return this.subscriptionFor(GAME_CHANNEL);
+  }
+
+  private subscriptionFor(channel: string): ChannelParams | null {
+    for (const params of this.subscriptions.values()) {
+      if (params.channel === channel) return params;
+    }
+    return null;
+  }
 
   private onOpen(): void {
-    this.parser.reset();
-    this.connected = false;
-    // Anything queued while the socket was down goes out after CONNECT, in the
-    // order it was issued, so SUBSCRIBE still precedes SEND.
-    const queued = this.outbox;
-    this.outbox = [];
-    this.socket?.send(
-      encodeStompFrame("CONNECT", {
-        "accept-version": "1.2",
-        // <desired send interval>,<desired receive interval>: we answer the
-        // server's pings immediately, and ask it to ping at least this often.
-        "heart-beat": `0,${Math.round(this.heartbeatMs / 2)}`,
-        host: hostOf(this.url),
-      }),
-    );
-    for (const frame of queued) this.socket?.send(frame);
+    // The TCP upgrade is not the connection: nothing may be sent until the
+    // server has said `welcome`.
     this.lastInboundAt = Date.now();
+    this.startHeartbeat();
   }
 
   private onText(text: string): void {
     this.lastInboundAt = Date.now();
-    for (const frame of this.parser.push(text)) {
+    for (const frame of this.reader.push(text)) {
       this.onFrameHook?.(frame);
-      if (frame.command === "") {
-        // Heart-beat in: answer with a bare EOL, or the server drops us.
-        this.pingOutstanding = false;
-        this.writeRaw("\n");
-        continue;
-      }
-      switch (frame.command) {
-        case "CONNECTED":
-          this.connected = true;
-          this.setState("connected");
-          this.startHeartbeat();
-          this.connectResolve?.();
-          this.connectResolve = null;
-          this.connectReject = null;
-          break;
-        case "MESSAGE":
-          this.onMessageFrame(frame);
-          break;
-        case "RECEIPT":
-          this.onReceiptFrame(frame);
-          break;
-        case "ERROR":
-          this.raise(new Error(frame.headers.get("message") ?? "stomp error"));
-          break;
-        default:
-          break;
-      }
+      this.onFrame(frame);
     }
   }
 
-  private onMessageFrame(frame: StompFrame): void {
-    if (!frame.body) return;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(frame.body);
-    } catch {
-      this.raise(new Error("malformed message body"));
-      return;
+  private onFrame(frame: CableFrame): void {
+    switch (frame.type) {
+      case WELCOME:
+        this.onWelcome();
+        return;
+      case PING:
+        // Fire and forget, exactly as the gem's own client treats it: this
+        // refreshes `lastActivity` and nothing else.
+        return;
+      case CONFIRM_SUBSCRIPTION:
+      case REJECTION:
+        this.onSubscriptionReply(frame);
+        return;
+      case DISCONNECT:
+        this.onServerDisconnect(frame);
+        return;
+      default:
+        this.onPayload(frame);
     }
+  }
+
+  private onWelcome(): void {
+    this.welcomed = true;
+    this.setState("connected");
+    this.connectResolve?.();
+    this.connectResolve = null;
+    this.connectReject = null;
+    // Anything queued while the connection was opening goes out now, in order,
+    // so a subscribe still precedes the message that needs it.
+    const queued = this.outbox;
+    this.outbox = [];
+    for (const text of queued) {
+      // Re-dispatch rather than writing raw: a queued message still has to
+      // wait for its subscription to be confirmed.
+      const frame = parseFrame(text);
+      if (frame) this.write(frame as unknown as Record<string, unknown>);
+      else this.writeRaw(text);
+    }
+  }
+
+  private onSubscriptionReply(frame: CableFrame): void {
+    const identifier = frame.identifier;
+    if (identifier === undefined) return;
+    const sentAtMs = this.sentAt.get(identifier);
+    if (sentAtMs !== undefined) this.sentAt.delete(identifier);
+    if (frame.type === REJECTION) {
+      this.raise(new Error(`subscription rejected: ${identifier}`));
+      this.subscriptions.delete(identifier);
+      this.pendingMessages.delete(identifier);
+    } else {
+      this.confirmed.add(identifier);
+      // The server registers a subscription asynchronously relative to our
+      // write, so a `message` sent straight after `subscribe` can arrive first
+      // and be refused with "unable to find subscription". Holding messages
+      // until the confirmation removes that race entirely.
+      for (const text of this.pendingMessages.get(identifier) ?? []) this.writeRaw(text);
+      this.pendingMessages.delete(identifier);
+    }
+    for (const handler of this.receiptHandlers) {
+      handler(identifier, sentAtMs ?? this.lastInboundAt, this.lastInboundAt);
+    }
+  }
+
+  private onServerDisconnect(frame: CableFrame): void {
+    const info: ServerDisconnect = {
+      reason: typeof frame.reason === "string" ? frame.reason : "server closed the connection",
+      reconnect: frame.reconnect !== false,
+    };
+    this.serverClosed = !info.reconnect;
+    for (const handler of this.disconnectHandlers) handler(info);
+    this.finishClose();
+  }
+
+  /** A subscription's payload: `{identifier, message}`. */
+  private onPayload(frame: CableFrame): void {
+    const identifier = frame.identifier;
+    // Routing is by identifier: anything we do not hold is not ours.
+    if (identifier === undefined || !this.subscriptions.has(identifier)) return;
+    const parsed = decodePayload(frame.message);
     if (!isServerMessage(parsed)) {
       this.raise(new Error(`unsupported protocol message: ${String((parsed as { t?: unknown } | null)?.t)}`));
       return;
@@ -523,48 +516,42 @@ export class StompTransport implements ChannelTransport {
     for (const handler of this.messageHandlers) handler(parsed);
   }
 
-  private onReceiptFrame(frame: StompFrame): void {
-    const receiptId = frame.headers.get("receipt-id");
-    if (receiptId === undefined) return;
-    const sentAtMs = this.receiptsSent.get(receiptId);
-    this.receiptsSent.delete(receiptId);
-    const receivedAtMs = this.lastInboundAt;
-    if (receiptId === this.closingReceipt) {
-      this.finishClose();
-      return;
-    }
-    for (const handler of this.receiptHandlers) {
-      handler(receiptId, sentAtMs ?? receivedAtMs, receivedAtMs);
-    }
-  }
-
   private onClose(ev: CloseEvent): void {
-    this.stopHeartbeat();
-    if (this.closeTimer !== null) {
-      clearTimeout(this.closeTimer);
-      this.closeTimer = null;
-    }
-    this.socket = null;
-    this.connected = false;
-    this.subscriptions.clear();
-    this.gameChannel = null;
-    this.outbox.length = 0;
-    this.receiptsSent.clear();
+    const wasWelcomed = this.welcomed;
+    this.welcomed = false;
     if (this.connectReject) {
-      const err = new Error(`cable closed before the STOMP handshake (code ${ev.code})`);
+      const err = new Error(`cable closed before welcome (code ${ev.code})`);
       this.connectReject(err);
       this.connectResolve = null;
       this.connectReject = null;
     }
-    this.setState(this.closeRequested ? "closed" : "reconnecting");
+    this.setState(this.closeRequested || this.serverClosed ? "closed" : wasWelcomed ? "reconnecting" : "connecting");
   }
 
-  private writeFrame(frame: string): void {
-    if (!this.connected) {
-      if (this.outbox.length < MAX_OUTBOX) this.outbox.push(frame);
+  private write(frame: Record<string, unknown>): void {
+    const text = JSON.stringify(frame);
+    if (!this.welcomed) {
+      if (this.outbox.length < 256) this.outbox.push(text);
       return;
     }
-    this.writeRaw(frame);
+    if (frame.command === "message" && !this.holdUntilConfirmed(String(frame.identifier), text)) {
+      this.writeRaw(text);
+    } else if (frame.command !== "message") {
+      this.writeRaw(text);
+    }
+  }
+
+  /**
+   * Holds a `message` whose subscription is not confirmed yet. Returns false
+   * when the message was held (or dropped, because there is no subscription).
+   */
+  private holdUntilConfirmed(identifier: string, text: string): boolean {
+    if (this.confirmed.has(identifier)) return false;
+    if (!this.subscriptions.has(identifier)) return true;
+    const queue = this.pendingMessages.get(identifier) ?? [];
+    if (queue.length < CableTransport.MAX_PENDING_MESSAGES) queue.push(text);
+    this.pendingMessages.set(identifier, queue);
+    return true;
   }
 
   private writeRaw(text: string): void {
@@ -581,23 +568,34 @@ export class StompTransport implements ChannelTransport {
     this.stopHeartbeat();
     if (this.heartbeatMs <= 0) return;
     this.heartbeatTimer = setInterval(() => {
-      // A socket silent far past the negotiated window is dead; closing it
-      // moves us to `reconnecting`.
-      if (Date.now() - this.lastInboundAt > this.heartbeatMs * 3) {
-        this.socket?.close();
-        return;
-      }
-      if (this.pingOutstanding) return;
-      this.pingOutstanding = true;
-      this.writeRaw("\n");
+      if (this.lastInboundAt === 0) return;
+      if (Date.now() - this.lastInboundAt > this.heartbeatMs * 3) this.socket?.close();
     }, this.heartbeatMs) as unknown as number;
   }
 
   private stopHeartbeat(): void {
+    if (this.closeTimer !== null) {
+      clearTimeout(this.closeTimer);
+      this.closeTimer = null;
+    }
     if (this.heartbeatTimer !== null) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
+  }
+
+  private finishClose(): void {
+    this.stopHeartbeat();
+    const socket = this.socket;
+    if (socket && (socket.readyState === 0 || socket.readyState === 1)) socket.close();
+    this.socket = null;
+    this.welcomed = false;
+    this.subscriptions.clear();
+    this.sentAt.clear();
+    this.confirmed.clear();
+    this.pendingMessages.clear();
+    this.outbox.length = 0;
+    this.setState("closed");
   }
 
   private setState(state: TransportState): void {
@@ -611,7 +609,28 @@ export class StompTransport implements ChannelTransport {
   }
 }
 
-/** PROTOCOL.md §1–§2: lobby traffic goes to `lobby`, gameplay to `game:<id>`. */
+/**
+ * A server payload is a Ruby `to_json` string for anything the channels
+ * `transmit`, and an already-decoded object when ActionCable re-encodes it.
+ * Both are accepted; a string is parsed once, here.
+ */
+function decodePayload(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** The cable carries the session token as `?token=`, which the server reads. */
+export function cableUrl(url: string, token: string): string {
+  if (token === "") return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
+/** Lobby traffic goes to `LobbyChannel`, everything else to `GameChannel`. */
 function isLobbyMessage(message: ClientMessage): boolean {
   return message.t.startsWith("lobby:");
 }

@@ -14,7 +14,7 @@ import { PROTOCOL_VERSION } from "@shared/protocol";
 import type { ClientMessage, LobbyChatLine, LobbyContext, LobbyMatchSummary, MatchMode, Race, ServerMessage } from "@shared/protocol";
 import { TypedEmitter } from "./events";
 import type { Unsubscribe } from "./events";
-import { LOBBY_CHANNEL, StompTransport } from "./transport";
+import { CableTransport, lobbyParams } from "./transport";
 import type { ChannelTransport, TransportState } from "./transport";
 
 /** The broadcast the server sends on the `lobby` channel. */
@@ -55,7 +55,7 @@ export const LOBBY_CHAT_COOLDOWN_MS = 500;
 export const LOBBY_CHAT_MAX_LENGTH = 280;
 
 export interface LobbyClientOptions {
-  /** Transport override; a {@link StompTransport} is built when absent. */
+  /** Transport override; a {@link CableTransport} is built when absent. */
   transport?: ChannelTransport;
   /** Match this client is currently seated in, for the argument-free helpers. */
   matchId?: number;
@@ -75,7 +75,7 @@ export class LobbyClient {
 
   constructor(options: LobbyClientOptions = {}) {
     this.ownsTransport = options.transport === undefined;
-    this.transport = options.transport ?? new StompTransport();
+    this.transport = options.transport ?? new CableTransport();
     this.chatCooldownMs = options.chatCooldownMs ?? LOBBY_CHAT_COOLDOWN_MS;
     this.matchId = options.matchId ?? null;
     this.transport.onMessage((msg) => this.onMessage(msg));
@@ -114,7 +114,7 @@ export class LobbyClient {
   subscribe(): void {
     if (this.subscribed) return;
     this.subscribed = true;
-    this.transport.subscribe(LOBBY_CHANNEL);
+    this.transport.subscribe(lobbyParams());
   }
 
   /** Asks the server for a match listing (PROTOCOL.md §2). */
@@ -199,7 +199,7 @@ export class LobbyClient {
 
   /** Leaves the lobby channel; the transport itself is left alone. */
   dispose(): void {
-    this.transport.unsubscribe(LOBBY_CHANNEL);
+    this.transport.unsubscribe(lobbyParams());
     this.subscribed = false;
     if (this.ownsTransport) this.transport.close();
     this.events.removeAll();

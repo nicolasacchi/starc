@@ -53,8 +53,8 @@ import { ReconnectController, systemTimer } from "./reconnect";
 import type { TimerApi, TimerHandle } from "./reconnect";
 import { SnapshotBuffer } from "./snapshotBuffer";
 import type { BufferedSnapshot, Snapshot } from "./snapshotBuffer";
-import { gameChannelFor, LOBBY_CHANNEL, StompTransport } from "./transport";
-import type { ChannelTransport, TransportState } from "./transport";
+import { CableTransport, gameParams, lobbyParams } from "./transport";
+import type { ChannelTransport, ServerDisconnect, TransportState } from "./transport";
 
 /** Phase of the connection, from the game screen's point of view. */
 export type GameConnectionState =
@@ -116,7 +116,7 @@ export interface GameConnectionOptions {
   url: string;
   /** Session token from the REST login. */
   token: string;
-  /** Transport override; a {@link StompTransport} is built when absent. */
+  /** Transport override; a {@link CableTransport} is built when absent. */
   transport?: ChannelTransport;
   /** Player id, when the caller already knows it. */
   playerId?: number;
@@ -197,7 +197,7 @@ export class GameConnection {
     this.timer = options.timer ?? systemTimer;
 
     this.ownsTransport = options.transport === undefined;
-    this.transport = options.transport ?? new StompTransport();
+    this.transport = options.transport ?? new CableTransport();
     this.snapshots = new SnapshotBuffer(options.snapshotCapacity);
     this.interpolator = new Interpolator(this.snapshots);
     this.metrics = new NetMetrics();
@@ -216,6 +216,7 @@ export class GameConnection {
     this.transport.onStateChange((state) => this.onTransportState(state));
     this.transport.onMessage((msg) => this.onMessage(msg));
     this.transport.onError((err) => this.emitError("transport_error", err.message, false));
+    this.transport.onDisconnect((info) => this.onServerDisconnect(info));
     this.transport.onReceipt((_id, sentAtMs, receivedAtMs) => {
       this.rttMs = Math.max(0, receivedAtMs - sentAtMs);
       this.metrics.recordReceipt(sentAtMs, receivedAtMs);
@@ -362,7 +363,7 @@ export class GameConnection {
     this.cancelFlush();
     this.cancelCountdown();
     this.forgetWorld();
-    this.transport.unsubscribe(LOBBY_CHANNEL);
+    this.transport.unsubscribe(lobbyParams());
     if (this.ownsTransport) this.transport.close();
     this.started = false;
     this.setState("closed");
@@ -497,6 +498,19 @@ export class GameConnection {
     this.events.emit("snapshot", msg);
   }
 
+  private onServerDisconnect(info: ServerDisconnect): void {
+    // `reconnect: false` is the server refusing this connection for good;
+    // retrying it would fail identically forever.
+    if (!info.reconnect) {
+      this.reconnect.stop();
+      this.intentionalClose = true;
+      this.setState("closed");
+      this.emitError("server_error", `the server closed the cable: ${info.reason}`, true);
+      return;
+    }
+    this.emitError("server_error", `the server closed the cable: ${info.reason}`, false);
+  }
+
   private onTransportState(state: TransportState): void {
     if (this.intentionalClose) return;
     if (state === "connected") {
@@ -522,11 +536,11 @@ export class GameConnection {
   /* -------------------------------------------------------------- outbound */
 
   private subscribeAll(): void {
-    this.transport.subscribe(LOBBY_CHANNEL);
+    this.transport.subscribe(lobbyParams());
     if (this.currentMatchId === null) return;
-    const channel = gameChannelFor(this.currentMatchId);
-    this.transport.subscribe(channel);
-    this.transport.identify(channel);
+    const params = gameParams(this.currentMatchId);
+    this.transport.subscribe(params);
+    this.transport.identify(params);
   }
 
   /**
