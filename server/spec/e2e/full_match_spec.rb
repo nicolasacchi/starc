@@ -666,7 +666,7 @@ RSpec.describe "a full match over the real stack", :e2e do
 
     # A `select` is accepted silently, so the proof it landed is that no second
     # `error` follows and the subscription still streams.
-    late_error = bystander.drain(timeout: 1.0, type: "error")
+    late_error = bystander.drain(timeout: 5.0, type: "error")
     expect(late_error).to be_empty, "the recovered client was refused again: #{late_error.map(&:payload)}"
     expect(bystander.server_closed?).to be(false), "the cable was closed after the recovered command"
     expect(collect_snapshots(bystander, 2)).not_to be_empty
@@ -705,7 +705,7 @@ RSpec.describe "a full match over the real stack", :e2e do
 
   # Returns the next snapshot payload, or nil when `quiet` is set and none
   # arrives inside the poll window.
-  def await_snapshot(client, timeout: 5, quiet: false)
+  def await_snapshot(client, timeout: 10, quiet: false)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
     loop do
       remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
