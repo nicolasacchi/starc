@@ -49,7 +49,6 @@ if (root === null) {
   reportFailure("The page is missing its mount point", 'Expected an element with id "app" in the document.');
 } else {
   const app = new App();
-  (window as unknown as { __app: App }).__app = app;
   app.mount(root).catch((err: unknown) => {
     reportFailure("The game could not start", describe(err));
   });

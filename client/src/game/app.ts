@@ -1267,8 +1267,10 @@ export class App implements UiHost {
       this.notify(message, "error");
       return;
     }
-    for (const node of Object.values(this.containers)) {
-      if (node) node.style.display = "none";
+    for (const [name, node] of Object.entries(this.containers)) {
+      // The fatal layer is mounted inside the game screen, so that one stays
+      // on: hiding it would take the message down with it.
+      if (node && name !== "game") node.style.display = "none";
     }
     layer.textContent = "";
     layer.style.display = "";
