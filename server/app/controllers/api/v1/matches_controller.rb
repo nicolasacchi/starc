@@ -272,14 +272,14 @@ module Api
           snapshot_rate: SNAPSHOT_RATE,
           countdown_ms: COUNTDOWN_MS,
           players: seats.map do |seat|
-            point = starts[seat.slot] || { "x" => 32.0, "y" => 32.0 }
+            point = starts[seat.slot] || { "x" => 32.0, "z" => 32.0 }
             {
               player_id: seat.player_id,
               slot: seat.slot.to_i,
               race: seat.race.to_s,
               name: seat.player&.name.to_s,
               team: seat.team.to_i,
-              start: { x: point["x"].to_f, y: point["y"].to_f }
+              start: { x: point["x"].to_f, z: point["z"].to_f }
             }
           end
         }

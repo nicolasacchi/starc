@@ -294,18 +294,26 @@ class LobbyChannel < ApplicationCable::Channel
 
     match.mode = mode if mode.present?
 
+    # Both branches can land on a `max_players` that the seated players already
+    # exhaust, so the guard is shared: leaving it out orphans the seats, and
+    # the next `add_player!` raises "match is full" instead of answering
+    # `lobby_full`. `<=`, because a lobby nobody can join cannot be started.
     map_id = data["map_id"].to_s
     if map_id.present?
       map = Starc::Maps.find(map_id)
       return "unknown map #{map_id.inspect}" if map.nil?
       return "that map only seats #{map['max_players']}" if map["max_players"].to_i < match.player_count
 
-      match.map_id = map_id
-      match.max_players = [clamp_max_players(data["max_players"], map), match.player_count].max
+      # A bare map change takes the new map's own seat count, so the map cap
+      # stays the source of truth for how large the match may get.
+      requested = data.key?("max_players") ? clamp_max_players(data["max_players"], map) : map["max_players"].to_i
     elsif data.key?("max_players")
       requested = clamp_max_players(data["max_players"], nil)
-      return "the match already has #{match.player_count} players" if requested < match.player_count
+    end
+    return "the match already has #{match.player_count} players" if requested && requested <= match.player_count
 
+    unless requested.nil?
+      match.map_id = map_id if map_id.present?
       match.max_players = requested
     end
 

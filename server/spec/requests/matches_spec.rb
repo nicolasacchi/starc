@@ -708,8 +708,9 @@ RSpec.describe "Api::V1 matches", type: :request do
       payload["players"].each do |seat|
         expect(seat.keys).to match_array(%w[player_id slot race name team start])
         expect(seat["team"]).to be_in([1, 2])
+        # Ground plane is x/z (three.js Y-up); `start` is a ground position.
         expect(seat["start"]).to include("x" => starts[seat["slot"]]["x"].to_f,
-                                         "y" => starts[seat["slot"]]["y"].to_f)
+                                         "z" => starts[seat["slot"]]["z"].to_f)
       end
       expect(payload["players"].map { |p| p["player_id"] }).to eq([host_player.id, joiner.id])
       expect(payload["players"].map { |p| p["race"] }).to eq(%w[terran zerg])
