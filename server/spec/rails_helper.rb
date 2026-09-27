@@ -36,10 +36,13 @@ RSpec.configure do |config|
   config.include FactoryBot::Syntax::Methods
   config.include ActiveSupport::Testing::TimeHelpers
 
-  # `spec/e2e` boots a real Rails server on a real port and drives real
-  # WebSocket clients through a full match. It is slow and needs a free port,
-  # so it is opt-in: `bundle exec rspec spec/e2e`.
-  config.filter_run_excluding(e2e: true) unless config.files_to_run.one? { |f| f.start_with?("spec/e2e") }
+  # `spec/e2e` boots a real Rails server on a real port, drives real WebSocket
+  # clients through a whole match, and commits rows to the database — so it is
+  # strictly opt-in, and the opt-in is explicit rather than inferred from the
+  # file list. Run it with `STARC_E2E=1 bundle exec rspec` or
+  # `bundle exec rspec spec/e2e`.
+  e2e_requested = ENV["STARC_E2E"] == "1" || ARGV.any? { |a| a.include?("spec/e2e") }
+  config.filter_run_excluding(e2e: true) unless e2e_requested
   config.define_derived_metadata(file_path: %r{/spec/e2e/}) { |meta| meta[:e2e] = true }
 
   # The simulation is deterministic; pin the global RNG per example so an

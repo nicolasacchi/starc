@@ -231,11 +231,11 @@ export class App implements UiHost {
     this.doc = root.ownerDocument;
     const doc = this.doc;
     this.win = doc.defaultView;
-    root.classList.add("starc-app");
+    root.classList.add("app");
     root.textContent = "";
 
     const app = doc.createElement("div");
-    app.className = "starc-app__inner";
+    app.className = "app__inner";
     root.appendChild(app);
 
     const menuContainer = this.screenContainer(doc, app, "menu");
@@ -245,7 +245,7 @@ export class App implements UiHost {
     this.buildGameLayer(doc, app);
 
     const toasts = doc.createElement("div");
-    toasts.className = "starc-toasts";
+    toasts.className = "toasts";
     app.appendChild(toasts);
     this.notifier.mount(toasts);
 
@@ -282,7 +282,7 @@ export class App implements UiHost {
 
   private screenContainer(doc: Document, parent: HTMLElement, name: ScreenName): HTMLElement {
     const node = doc.createElement("div");
-    node.className = `starc-screen starc-screen--${name}`;
+    node.className = `screen screen--${name}`;
     node.dataset.screen = name;
     node.style.display = "none";
     parent.appendChild(node);
@@ -294,23 +294,23 @@ export class App implements UiHost {
     const layer = this.screenContainer(doc, parent, "game");
 
     const canvas = doc.createElement("canvas");
-    canvas.className = "starc-canvas";
+    canvas.className = "canvas";
     canvas.tabIndex = 0;
     layer.appendChild(canvas);
     this.canvas = canvas;
 
     const hudHost = doc.createElement("div");
-    hudHost.className = "starc-hud";
+    hudHost.className = "hud";
     layer.appendChild(hudHost);
     this.hudHost = hudHost;
 
-    this.countdownLayer = this.overlay(doc, layer, "starc-countdown");
-    this.flashLayer = this.overlay(doc, layer, "starc-flash");
-    this.pauseLayer = this.overlay(doc, layer, "starc-pause");
-    this.loadingLayer = this.overlay(doc, layer, "starc-loading");
-    this.netLayer = this.overlay(doc, layer, "starc-net");
-    this.statsLayer = this.overlay(doc, layer, "starc-stats");
-    this.fatalLayer = this.overlay(doc, layer, "starc-fatal");
+    this.countdownLayer = this.overlay(doc, layer, "countdown");
+    this.flashLayer = this.overlay(doc, layer, "flash");
+    this.pauseLayer = this.overlay(doc, layer, "pause");
+    this.loadingLayer = this.overlay(doc, layer, "loading");
+    this.netLayer = this.overlay(doc, layer, "net");
+    this.statsLayer = this.overlay(doc, layer, "stats");
+    this.fatalLayer = this.overlay(doc, layer, "fatal");
   }
 
   private overlay(doc: Document, parent: HTMLElement, className: string): HTMLElement {
@@ -662,10 +662,10 @@ export class App implements UiHost {
     if (!layer || !doc) return;
     this.countdownEndsAtMs = this.nowMs() + countdownMs;
     const label = doc.createElement("p");
-    label.className = "starc-countdown__label";
+    label.className = "countdown__label";
     label.textContent = "Match begins in";
     const number = doc.createElement("p");
-    number.className = "starc-countdown__number";
+    number.className = "countdown__number";
     layer.textContent = "";
     layer.appendChild(label);
     layer.appendChild(number);
@@ -752,7 +752,7 @@ export class App implements UiHost {
     if (!layer || !doc) return;
     layer.textContent = "";
     const title = doc.createElement("h2");
-    title.className = "starc-pause__title";
+    title.className = "pause__title";
     title.textContent = "Paused";
     layer.appendChild(title);
     layer.appendChild(this.actionButton(doc, "Resume", () => this.setPaused(false)));
@@ -761,7 +761,7 @@ export class App implements UiHost {
     );
     layer.appendChild(this.actionButton(doc, "Leave to menu", () => this.leaveToMenu(), "danger"));
     const hint = doc.createElement("p");
-    hint.className = "starc-pause__hint";
+    hint.className = "pause__hint";
     hint.textContent = "Esc resumes · F3 toggles the net readout";
     layer.appendChild(hint);
   }
@@ -774,7 +774,7 @@ export class App implements UiHost {
   ): HTMLButtonElement {
     const button = doc.createElement("button");
     button.type = "button";
-    button.className = `starc-button starc-button--${variant}`;
+    button.className = `btn btn--${variant}`;
     button.textContent = label;
     button.addEventListener("click", onClick);
     return button;
@@ -1249,10 +1249,10 @@ export class App implements UiHost {
     if (!layer || !doc) return;
     layer.textContent = "";
     const title = doc.createElement("p");
-    title.className = "starc-loading__title";
+    title.className = "loading__title";
     title.textContent = message;
     const hint = doc.createElement("p");
-    hint.className = "starc-loading__hint";
+    hint.className = "loading__hint";
     hint.textContent = "Waiting for the server to open the match…";
     layer.appendChild(title);
     layer.appendChild(hint);
@@ -1272,10 +1272,10 @@ export class App implements UiHost {
     layer.textContent = "";
     layer.style.display = "";
     const title = doc.createElement("h2");
-    title.className = "starc-fatal__title";
+    title.className = "fatal__title";
     title.textContent = "Cannot start the game";
     const body = doc.createElement("p");
-    body.className = "starc-fatal__body";
+    body.className = "fatal__body";
     body.textContent = message;
     layer.appendChild(title);
     layer.appendChild(body);
@@ -1331,7 +1331,7 @@ export class App implements UiHost {
     this.state.dispose();
     if (this.root) {
       this.root.textContent = "";
-      this.root.classList.remove("starc-app");
+      this.root.classList.remove("app");
     }
     this.root = null;
     this.containers = {};

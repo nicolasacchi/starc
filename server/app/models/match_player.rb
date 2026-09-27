@@ -19,6 +19,16 @@ class MatchPlayer < ApplicationRecord
 
   scope :ordered, -> { order(:slot) }
 
+  # The seats of one player whose match is still live (a lobby waiting to start
+  # or a running game). `finished` and `abandoned` matches do not count: they
+  # must not keep a player from joining something else. The single definition
+  # both join paths consult, so REST and cable cannot disagree about whether a
+  # second seat is possible.
+  def self.live_seats_for(player_id)
+    live = Match.where(status: [Match.statuses.fetch("lobby"), Match.statuses.fetch("in_progress")])
+    joins(:match).where(player_id: player_id).merge(live)
+  end
+
   def self.race_taken?(match, race)
     return false if race.blank?
 

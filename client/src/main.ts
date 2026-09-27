@@ -13,18 +13,17 @@ import { App } from "./game/app";
 function reportFailure(heading: string, detail: string): void {
   const host = document.querySelector<HTMLElement>("#app") ?? document.body;
   host.textContent = "";
-  host.classList.add("starc-app");
+  host.classList.add("app");
 
   const panel = document.createElement("div");
-  panel.className = "starc-fatal";
-  panel.style.display = "block";
+  panel.className = "fatal";
 
   const title = document.createElement("h2");
-  title.className = "starc-fatal__title";
+  title.className = "fatal__title";
   title.textContent = heading;
 
   const body = document.createElement("p");
-  body.className = "starc-fatal__body";
+  body.className = "fatal__body";
   body.textContent = detail;
 
   panel.appendChild(title);
@@ -50,6 +49,7 @@ if (root === null) {
   reportFailure("The page is missing its mount point", 'Expected an element with id "app" in the document.');
 } else {
   const app = new App();
+  (window as unknown as { __app: App }).__app = app;
   app.mount(root).catch((err: unknown) => {
     reportFailure("The game could not start", describe(err));
   });

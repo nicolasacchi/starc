@@ -102,6 +102,46 @@ body {
   overflow: hidden;
 }
 
+/* App shell ------------------------------------------------------------- */
+
+/* The mount point the game owns. Absolute, so every screen, canvas and
+   overlay inside it can be positioned against the viewport instead of
+   against whatever the flow happens to hand them. */
+.app {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--void);
+}
+
+/* The one box every screen is laid out in. `inset: 0` gives it a definite
+   height, which is what the screens and the canvas below size themselves
+   from; `overflow: hidden` makes it a clipping block formatting context. */
+.app__inner {
+  position: absolute;
+  inset: 0;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The WebGL surface. It fills the game screen and sits under the HUD. The
+   renderer reads clientWidth/clientHeight and applies the pixel ratio itself,
+   so the CSS box is the whole sizing contract — no width/height in CSS units
+   may drift from what the renderer measured. */
+.canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  background: var(--void);
+}
+
 h1,
 h2,
 h3,
@@ -170,6 +210,21 @@ select {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+
+/* `App#setScreen` shows one screen at a time by writing an inline `display`,
+   so these modifiers carry layout only. The menu, lobby and result screens
+   mount their own `.screen` root inside these boxes; the game screen has no
+   root of its own and is a bare positioning context. */
+.screen--menu,
+.screen--lobby,
+.screen--result {
+  overflow: hidden;
+}
+
+.screen--game {
+  display: block;
+  overflow: hidden;
 }
 
 .panel {
@@ -1077,6 +1132,7 @@ select.field__input {
 .hud {
   position: absolute;
   inset: 0;
+  z-index: 20;
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -1942,6 +1998,170 @@ select.field__input {
   border-color: var(--amber);
   color: var(--amber);
   box-shadow: 0 0 14px -4px rgba(255, 182, 72, 0.7);
+}
+
+/* ================================================ in-game overlays */
+
+/* Scrims the game screen draws over the action. They sit *under* the HUD, so
+   a countdown or a pause never hides the chrome, and they take no pointer
+   events of their own — the same shape as `.hud > *`, with the buttons
+   inside them as the only interactive part. */
+.countdown,
+.loading,
+.pause,
+.fatal {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.pause > *,
+.fatal > * {
+  pointer-events: auto;
+  min-width: 0;
+}
+
+.countdown {
+  background: radial-gradient(55% 45% at 50% 50%, rgba(4, 7, 11, 0.82), rgba(4, 7, 11, 0.3) 72%, transparent);
+}
+
+.countdown__label {
+  font-size: var(--fs-xs);
+  letter-spacing: var(--tracking);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.countdown__number {
+  font-family: var(--font-mono);
+  font-size: 68px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--accent);
+  text-shadow: 0 0 42px var(--accent-glow);
+}
+
+.loading {
+  gap: 8px;
+  background: rgba(4, 7, 11, 0.86);
+}
+
+.loading__title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.loading__hint,
+.pause__hint {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+.pause {
+  gap: 10px;
+  background: rgba(4, 7, 11, 0.7);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+}
+
+.pause__title,
+.fatal__title {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-indent: 0.24em;
+  text-transform: uppercase;
+}
+
+.fatal__title {
+  color: var(--danger);
+}
+
+.pause > .btn,
+.fatal > .btn {
+  min-width: 220px;
+  justify-content: center;
+}
+
+.fatal {
+  background: rgba(4, 7, 11, 0.92);
+}
+
+.fatal__body {
+  max-width: 64ch;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The rejection flash is positioned per region in `App#flash`, which writes
+   that box inline; the rule here only keeps the layer out of the way. */
+.flash {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+}
+
+/* Connection quality and the F3 readout: small monospace badges top centre,
+   clear of the resource bar and the match cluster. */
+.net,
+.stats {
+  position: absolute;
+  top: var(--hud-pad);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-sunken);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: pre;
+  pointer-events: none;
+}
+
+.stats {
+  top: calc(var(--hud-pad) + 26px);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+
+.net[data-quality="good"] {
+  border-color: rgba(92, 224, 138, 0.4);
+  color: var(--ok);
+}
+
+.net[data-quality="fair"] {
+  border-color: rgba(255, 182, 72, 0.4);
+  color: var(--amber);
+}
+
+.net[data-quality="poor"],
+.net[data-quality="offline"] {
+  border-color: rgba(255, 95, 86, 0.45);
+  color: var(--danger);
 }
 
 /* ================================================================ RESULT */

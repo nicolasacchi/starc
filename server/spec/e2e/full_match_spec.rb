@@ -32,6 +32,11 @@ RSpec.describe "a full match over the real stack", :e2e do
   COMMAND_TIMEOUT = 15
   END_TIMEOUT = 20
 
+  # A trained unit only appears once its build timer expires, and an scv takes
+  # 17 s of simulation time, so waiting for the spawned entity needs a longer
+  # bound than waiting for the command to be *accepted*.
+  BUILD_COMPLETE_TIMEOUT = 30
+
   # PROTOCOL.md §5: 20 Hz simulation, snapshots every second tick.
   EXPECTED_TICK_RATE = 20
   EXPECTED_SNAPSHOT_RATE = 10
@@ -320,19 +325,39 @@ RSpec.describe "a full match over the real stack", :e2e do
     sorted.size.odd? ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0
   end
 
-  # PROTOCOL.md §5: the server's y is authoritative terrain height; a client
+  # PROTOCOL.md §5: the server's `y` is authoritative terrain height — a client
   # that recomputes it from its own height field makes units float or sink.
+  #
+  # The tolerance is half of the last digit the wire carries, not 1e-6: the
+  # snapshot rounds `y` to three decimals (`Entity#round3`) to keep frames
+  # small, so a millimetre is the finest fact the protocol actually conveys.
+  # That is still far tighter than the bug this guards — a y/z mix-up moves a
+  # unit by tens of metres, not micrometres.
+  Y_PRECISION = 5e-4
+
+  # Every state in which an entity is travelling between two points. A
+  # harvesting worker shuttles in `harvesting` and `unloading` just as a
+  # combat unit does in `attacking`, so "not moving" has to mean "none of
+  # these", not "not `moving`".
+  TRAVELLING_STATES = %w[moving attacking returning building harvesting unloading].freeze
+
   def expect_entity_heights!(entities)
     terrain = Starc::Sim::Terrain.for("altaior")
-    sample = entities.first(12)
-    expect(sample).not_to be_empty, "expected entities to check heights on"
+    # Only entities that are standing still. `x` and `z` are rounded to three
+    # decimals on the wire too, so re-deriving the height at the *rounded*
+    # position of something crossing a slope measures the rounding of the
+    # position, not a defect in the height. A stationary unit is the honest
+    # sample, and it is what this assertion is actually about.
+    sample = entities.reject { |e| TRAVELLING_STATES.include?(e["st"]) }.first(12)
+    expect(sample).not_to be_empty, "expected stationary entities to check heights on"
 
     sample.each do |entity|
       expected = terrain.height_at(entity["x"], entity["z"])
       expect(entity["y"]).to be_a(Numeric)
-      expect(entity["y"]).to be_within(1e-6).of(expected),
-                                      "entity #{entity['id']} (#{entity['ty']}) is at y=#{entity['y']} " \
-                                      "but terrain says #{expected} at x=#{entity['x']} z=#{entity['z']}"
+      expect(entity["y"]).to be_within(Y_PRECISION).of(expected),
+                                      "entity #{entity['id']} (#{entity['ty']}, #{entity['st']}) is at " \
+                                      "y=#{entity['y']} but terrain says #{expected} " \
+                                      "at x=#{entity['x']} z=#{entity['z']}"
     end
   end
 
@@ -374,72 +399,87 @@ RSpec.describe "a full match over the real stack", :e2e do
     snapshots_a = collect_snapshots(@player_a[:client], 21)
     expect_snapshot_cadence!(snapshots_a)
 
-    # The second client is on the same match stream, so it must see the same
-    # ticks — a per-client broadcast would desync the two.
+    # The second client is on the same match stream, so the two must observe
+    # the *same* ticks — a per-client broadcast or a private simulation would
+    # desync them. Asserting an exact tick is wrong: the two clients sample the
+    # stream at different moments, so what matters is that the tick sets
+    # overlap and stay on the same 2-tick grid.
     snapshots_b = collect_snapshots(@player_b[:client], 3)
-    expect(snapshots_b.map { |s| s["tick"] }).to include(snapshots_a.last["tick"] + EXPECTED_SNAPSHOT_TICK_INTERVAL)
+    ticks_a = snapshots_a.map { |s| s["tick"] }
+    ticks_b = snapshots_b.map { |s| s["tick"] }
+    expect(ticks_b & ticks_a).not_to be_empty,
+                                    "the two clients saw disjoint tick sets (A: #{ticks_a}, B: #{ticks_b})"
+    expect_snapshot_cadence!(snapshots_b)
 
     # --- 3. the opening world is real and sits on the terrain (PROTOCOL §5) ---
     opening = snapshots_a.first
     entities = entities_of(opening)
     expect(entities).not_to be_empty, "the opening entity table was empty"
 
-    opening_terrain = Starc::Sim::Terrain.for("altaior")
-    [@player_a[:id], @player_b[:id]].each do |player_id|
+    # Each seat's opening is whatever its race opens with, taken from the
+    # roster the `game:start` already gave us — a terran base and a zerg base
+    # are different buildings, and hardcoding one of them would make this
+    # assertion quietly wrong for the other player.
+    start_a["players"].each do |seat|
+      player_id = seat["player_id"]
+      race = seat["race"]
       mine = entities_of(opening, player_id: player_id)
       expect(mine).not_to be_empty, "player #{player_id} owns nothing at match start"
 
-      buildings = mine.select { |e| e["ty"] == "command_center" }
-      workers = mine.select { |e| e["ty"] == "scv" }
-      expect(buildings.size).to eq(1), "player #{player_id} should open with one command_center, got #{buildings.map { |e| e['ty'] }}"
-      expect(workers).not_to be_empty, "player #{player_id} opened with no workers"
+      main_building = Starc::GameData.starting_building(race)
+      worker = Starc::GameData.starting_unit(race)
+
+      buildings = mine.select { |e| e["ty"] == main_building }
+      workers = mine.select { |e| e["ty"] == worker }
+      expect(buildings.size).to eq(1),
+                                 "player #{player_id} (#{race}) should open with one #{main_building}, " \
+                                 "got #{mine.map { |e| e['ty'] }.tally}"
+      expect(workers.size).to be >= 1,
+                                  "player #{player_id} (#{race}) opened with no #{worker}s"
     end
     expect_entity_heights!(entities)
 
     # The two players start apart, not stacked on one base.
-    mine_a = entities_of(opening, player_id: @player_a[:id])
-    mine_b = entities_of(opening, player_id: @player_b[:id])
-    hq_a = mine_a.find { |e| e["ty"] == "command_center" }
-    hq_b = mine_b.find { |e| e["ty"] == "command_center" }
-    expect(Math.hypot(hq_a["x"] - hq_b["x"], hq_a["z"] - hq_b["z"])).to be > 10
+    hq_a = entities_of(opening, player_id: @player_a[:id]).find { |e| e["ty"] == "command_center" }
+    hq_b = entities_of(opening, player_id: @player_b[:id]).find { |e| e["ty"] == "hatchery" }
+    expect(Math.hypot(hq_a["x"] - hq_b["x"], hq_a["z"] - hq_b["z"])).to be > 10,
+                                                                             "both players opened on the same spot"
 
     # --- 4. commands flow, and one produces a new entity (PROTOCOL §4) ------
-    # A worker building a refinery: 75 minerals, which the opening economy can
-    # afford, and it needs only the command_center the player already has.
-    worker = entities_of(await_snapshot(@player_a[:client]), player_id: @player_a[:id])
-                    .find { |e| e["ty"] == "scv" }
-    expect(worker).not_to be_nil, "player A has no worker to build with"
-
+    # An scv costs exactly the 50 minerals a player opens with, and the
+    # command_center that trains it is the building they opened with, so the
+    # command is affordable on tick one — no waiting on the economy, which
+    # matters because the suite has a wall-clock budget.
+    #
+    # Acceptance is observed as the command_center switching to `st ==
+    # "training"`, not as a queued count. `Systems::Production` moves the
+    # in-progress unit out of `train_queue` into `train_key` on the next tick,
+    # so a batch of one leaves `n` at 0 (and omitted) almost immediately — `n`
+    # is the *pending* count, not the total. `st` is the durable fact.
     before_ids = entities_of(await_snapshot(@player_a[:client]), player_id: @player_a[:id]).map { |e| e["id"] }
 
-    send_commands(@player_a, [{ "c" => "build", "worker_id" => worker["id"],
-                                "unit_type" => "refinery", "x" => hq_a["x"] + 4.0, "z" => hq_a["z"] + 4.0 }])
+    send_commands(@player_a, [{ "c" => "train", "building_id" => hq_a["id"], "unit_type" => "scv", "count" => 1 }])
 
-    new_entity = wait_until("a new entity owned by player A after its build command", timeout: COMMAND_TIMEOUT) do
+    training = wait_until("player A's command_center to start training", timeout: COMMAND_TIMEOUT) do
+      snapshot = await_snapshot(@player_a[:client], quiet: true)
+      next nil if snapshot.nil?
+
+      entities_of(snapshot, player_id: @player_a[:id]).find { |e| e["id"] == hq_a["id"] && e["st"] == "training" }
+    end
+    expect(training).not_to be_nil, "the train command was never accepted by the command_center"
+
+    # The scv itself is spawned when its build timer expires — 17 s of
+    # simulation time, which is why this wait is bounded separately from the
+    # one above. It is the end-to-end proof that the command reached the
+    # simulation and not merely the command queue.
+    trained = wait_until("a new scv to appear for player A", timeout: BUILD_COMPLETE_TIMEOUT) do
       snapshot = await_snapshot(@player_a[:client], quiet: true)
       next nil if snapshot.nil?
 
       entities_of(snapshot, player_id: @player_a[:id]).find { |e| !before_ids.include?(e["id"]) }
     end
-
-    expect(new_entity).not_to be_nil
-    expect(new_entity["ty"]).to eq("refinery")
-    expect(new_entity["prog"]).to be < 1.0, "a fresh refinery should still be under construction"
-    expect(new_entity["st"]).to eq("building")
-
-    # A second command the economy can afford, on the building that just exists:
-    # training an scv from the command_center costs 50 minerals and needs no
-    # prerequisite beyond what the player opened with.
-    ids_before_train = entities_of(await_snapshot(@player_a[:client]), player_id: @player_a[:id]).map { |e| e["id"] }
-    send_commands(@player_a, [{ "c" => "train", "building_id" => hq_a["id"], "unit_type" => "scv", "count" => 1 }])
-
-    trained = wait_until("a new unit trained by player A", timeout: COMMAND_TIMEOUT) do
-      snapshot = await_snapshot(@player_a[:client], quiet: true)
-      next nil if snapshot.nil?
-
-      entities_of(snapshot, player_id: @player_a[:id]).find { |e| !ids_before_train.include?(e["id"]) }
-    end
-    expect(trained).not_to be_nil, "the train command produced no new unit"
+    expect(trained).not_to be_nil, "the accepted train produced no new unit"
+    expect(trained["ty"]).to eq("scv")
 
     # --- 5. a mixed batch rejects per command, by original index (PROTOCOL §4) -
     victim = entities_of(await_snapshot(@player_a[:client]), player_id: @player_a[:id])
@@ -535,21 +575,30 @@ RSpec.describe "a full match over the real stack", :e2e do
     expect(header["winner"]).to eq(@player_b[:id])
     expect(header["players"]).to be_an(Array).and have_attributes(size: 2)
 
-    # `commands` is the accepted command stream — never the rejected ones, since
-    # a command the world refused never happened (PROTOCOL.md §8).
+    # `commands` is the accepted command stream and nothing else. A command the
+    # world refused never happened, so recording it would break the
+    # determinism guarantee of PROTOCOL.md §8 — the `train` and the valid
+    # `move` from the mixed batch must be here, and the two rejected commands
+    # must not be.
     commands = replay["commands"]
     expect(commands).to be_an(Array), "replay commands must be an array, got #{commands.class}"
     expect(commands).not_to be_empty, "the replay recorded no commands at all"
     commands.each do |entry|
       expect(entry).to include("tick" => be_an(Integer), "player_id" => be_an(Integer), "index" => be_an(Integer))
       expect(entry["c"]).to be_a(String)
+      expect(entry["player_id"]).to eq(@player_a[:id]), "only player A issued gameplay commands in this match"
     end
-    expect(commands.map { |c| c["c"] }).to include("build", "train"),
-                                               "the accepted build/train are missing from the replay"
+
+    recorded_types = commands.map { |c| c["c"] }.uniq
+    expect(recorded_types).to include("train"), "the accepted train is missing from the replay"
+    expect(recorded_types).to include("move"), "the accepted move from the mixed batch is missing"
+    expect(recorded_types).not_to include("definitely_not_a_command"),
+                                    "a rejected command was written to the replay: #{commands.inspect}"
 
     final_state = replay["final_state"]
     expect(final_state).to be_a(Hash), "replay final_state#{E2eServer.log_tail}"
-    expect(final_state["entities"]).to be_an(Array).and not_be_empty
+    expect(final_state["entities"]).to be_an(Array)
+    expect(final_state["entities"]).not_to be_empty, "the replay's final_state carries no entities"
 
     # The full replay document, which carries `format` and `version`.
     file_status, full = http_json(:get, "/api/v1/matches/#{@match_id}/replay_file")
@@ -582,13 +631,15 @@ RSpec.describe "a full match over the real stack", :e2e do
 
     expect_game_start!(@player_a[:client])
 
-    # A third cable, authenticated at the socket but never `identify`d on the
-    # game channel: PROTOCOL.md §1 makes `identify` mandatory before anything
-    # else, so a command from it must be refused.
-    bystander_token = @player_a[:token]
-    bystander = open_cable({ name: "bystander", id: @player_a[:id], token: bystander_token }, "Bystander")
+    # A third cable that is *anonymous at the socket* and never `identify`s on
+    # the game channel. PROTOCOL.md §1 makes `identify` mandatory before any
+    # other message, so a command from it must be refused. It opens without a
+    # token deliberately: a connection that already carries a token satisfies
+    # `require_player` on its own, so a token-carrying socket would exercise
+    # that fallback rather than the refusal.
+    bystander = open_cable({ name: "bystander", id: nil, token: nil }, "Bystander")
     game_params = { channel: "GameChannel", match_id: @match_id }
-    key = bystander.subscribe(game_params)
+    bystander.subscribe(game_params)
 
     bystander.await_confirmation(CableClient.channel_key(game_params), timeout: CONNECT_TIMEOUT)
     bystander.send_message(game_params, { "v" => 1, "t" => "game:command", "id" => SecureRandom.uuid,
@@ -601,23 +652,24 @@ RSpec.describe "a full match over the real stack", :e2e do
     expect(payload["code"]).to eq("unauthenticated")
     expect(payload["fatal"]).to be(true)
 
-    # The subscription must not be poisoned: the refusal ends the exchange, not
-    # the channel. After identifying, the same client works.
-    bystander.send_message(game_params, { "v" => 1, "t" => "identify", "token" => bystander_token })
+    # The refusal must end the exchange, not poison the subscription: the same
+    # socket has to be able to identify and carry on. It identifies as player
+    # A, who really is in this match.
+    bystander.send_message(game_params, { "v" => 1, "t" => "identify", "token" => @player_a[:token] })
     expect_game_start!(bystander)
 
     worker = entities_of(await_snapshot(@player_a[:client]), player_id: @player_a[:id])
                     .find { |e| e["ty"] == "scv" }
     bystander.send_message(game_params, { "v" => 1, "t" => "game:command", "id" => SecureRandom.uuid,
-                                          "from_tick" => worker["id"].to_i.zero? ? 0 : 1,
+                                          "from_tick" => 0,
                                           "commands" => [{ "c" => "select", "ids" => [worker["id"]] }] })
 
-    # A `select` is accepted silently; the proof it landed is that no fatal
-    # error follows and the client keeps receiving the stream.
-    sleep 0.3
+    # A `select` is accepted silently, so the proof it landed is that no second
+    # `error` follows and the subscription still streams.
+    late_error = bystander.drain(timeout: 1.0, type: "error")
+    expect(late_error).to be_empty, "the recovered client was refused again: #{late_error.map(&:payload)}"
     expect(bystander.server_closed?).to be(false), "the cable was closed after the recovered command"
-    snapshots = collect_snapshots(bystander, 2)
-    expect(snapshots).not_to be_empty
+    expect(collect_snapshots(bystander, 2)).not_to be_empty
   end
 
   it "resyncs a late subscriber: its own game:start, then live snapshots" do

@@ -68,6 +68,11 @@ class LobbyChannel < ApplicationCable::Channel
 
   def lobby_create(data)
     return unless require_player
+    # Creating a match seats the creator, so it is a join too: without this a
+    # second lobby opens behind the one the client is already pointed at.
+    if (other = live_seat_elsewhere(nil))
+      return reject_message("already_in_match", "you are already in match #{other.match_id}")
+    end
 
     name = data["name"].to_s.strip
     mode = data["mode"].to_s
@@ -101,6 +106,12 @@ class LobbyChannel < ApplicationCable::Channel
     return reject_message("not_found", "no such match") if match.nil?
     return reject_message("match_in_progress", "that match has already started") unless match.lobby?
     return reject_message("already_in_match", "you are already in that match") if match.match_players.exists?(player_id: player_id)
+    # A second live seat makes `LobbyRegistry#current_seat` answer with
+    # whichever seat it finds first, so `you.match_id` names a match that is
+    # not the one running and the client can never enter the game.
+    if (other = live_seat_elsewhere(match))
+      return reject_message("already_in_match", "you are already in match #{other.match_id}")
+    end
     return reject_message("lobby_full", "that match is full") if match.full?
     return reject_message("wrong_password", "incorrect match password") unless password_ok?(match, data["password"])
 
@@ -266,11 +277,24 @@ class LobbyChannel < ApplicationCable::Channel
     MatchPlayer.find_by(match_id: match_id.to_i, player_id: player_id)
   end
 
+  # The player's seat in a live match other than `match` (any live seat when
+  # `match` is nil). `MatchPlayer` owns the one definition of "live", so the
+  # REST path cannot drift from this one.
+  def live_seat_elsewhere(match)
+    seats = MatchPlayer.live_seats_for(player_id)
+    seats = seats.where.not(match_id: match.id) if match
+    seats.first
+  end
+
   # The live match this player is sitting in, if any.
   def lobby_match_of(player)
     return nil if player.nil?
 
-    seat = MatchPlayer.where(player_id: player).order(:slot).first
+    # Only live seats count: taking the first seat row of *any* match meant a
+    # player with a finished match at slot 0 and a live lobby at slot 1 never
+    # left the lobby on disconnect, because the finished match was found first
+    # and then ignored.
+    seat = MatchPlayer.live_seats_for(player).first
     return nil if seat.nil?
 
     match = Match.find_by(id: seat.match_id)

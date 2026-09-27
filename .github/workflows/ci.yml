@@ -101,4 +101,6 @@ jobs:
         run: bin/rails db:prepare
       - name: Two clients play a full match against the real server
         working-directory: server
+        env:
+          STARC_E2E: "1"
         run: bundle exec rspec spec/e2e --format documentation

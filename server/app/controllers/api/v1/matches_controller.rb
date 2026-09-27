@@ -100,6 +100,12 @@ module Api
 
         return render_error("match_in_progress", "That match is no longer joinable", :conflict) unless match.lobby?
         return render_error("already_in_match", "You are already in that match", :conflict) if in_match?(match)
+        # A second live seat leaves `LobbyRegistry#current_seat` answering with
+        # whichever seat it finds first, so the client is told it is in a match
+        # that is not the one running and can never enter the game.
+        if (other = live_seat_elsewhere(match))
+          return render_error("already_in_match", "You are already in match #{other.match_id}", :conflict)
+        end
         return render_error("lobby_full", "That match is full", :conflict) if match.full?
 
         if match.password_digest.present? && !password_matches?(match, body_value("password"))
@@ -171,6 +177,15 @@ module Api
         end
 
         match.start!
+        # Adopt the runner here, not only from the channels. Without this a
+        # match started over REST flips to `in_progress` and broadcasts
+        # `game:start`, but nothing ever steps the world — the match silently
+        # never simulates and no snapshot is ever sent.
+        if Starc::MatchRunner.adopt(match).nil?
+          match.update!(status: :abandoned, ended_at: Time.current)
+          return render_error("server_error", "the match could not be started on this server", :internal_server_error)
+        end
+
         broadcast_game_start(match)
 
         render_ok(match: match_json_for(match, current_player))
@@ -225,6 +240,12 @@ module Api
         match.match_players.exists?(player_id: current_player.id)
       end
 
+      # The player's seat in some *other* live match, if any. `MatchPlayer`
+      # owns the one definition of "live" so the cable path cannot drift.
+      def live_seat_elsewhere(match)
+        MatchPlayer.live_seats_for(current_player.id).where.not(match_id: match.id).first
+      end
+
       # Renders `404 not_found` and returns nil when the match or its replay is
       # missing.
       def find_replay!
@@ -256,33 +277,15 @@ module Api
 
       # ------------------------------------------------------------ payload
 
+      # The `game:start` payload has exactly one source: `MatchRunner#start_payload`.
+      # A second copy here drifted from it (it read the ground plane off
+      # `point["y"]` after the axis change, sending `y: 0.0` for every seat),
+      # so this now delegates rather than rebuilding the document.
       def game_start_payload(match)
-        map = Starc::Maps.find(match.map_id)
-        starts = Array(map && map["start_positions"])
-        seats = match.players_ordered
+        runner = Starc::MatchRunner.for(match.id)
+        return runner.start_payload if runner
 
-        {
-          v: 1,
-          t: "game:start",
-          ts: (Time.current.to_f * 1000).to_i,
-          match_id: match.id,
-          seed: match.seed.to_i,
-          map_id: match.map_id.to_s,
-          tick_rate: TICK_RATE,
-          snapshot_rate: SNAPSHOT_RATE,
-          countdown_ms: COUNTDOWN_MS,
-          players: seats.map do |seat|
-            point = starts[seat.slot] || { "x" => 32.0, "z" => 32.0 }
-            {
-              player_id: seat.player_id,
-              slot: seat.slot.to_i,
-              race: seat.race.to_s,
-              name: seat.player&.name.to_s,
-              team: seat.team.to_i,
-              start: { x: point["x"].to_f, z: point["z"].to_f }
-            }
-          end
-        }
+        raise ArgumentError, "no runner for match #{match.id} — the match was never started"
       end
 
       def game_ended_payload(match)
