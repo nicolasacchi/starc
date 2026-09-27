@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_SNAP_THRESHOLD_M, MovementPredictor } from "./prediction";
 import type { PredictedUnit } from "./prediction";
 import type { Snapshot } from "./snapshotBuffer";
-import type { Command, EntityState, ProtocolEntity } from "@shared/protocol";
+import type { EntityState, ProtocolEntity } from "@shared/protocol";
 
 const T0 = 1_700_000_000_000;
 const MARINE_SPEED = 4; // m/s, from the shared roster
@@ -217,7 +217,7 @@ describe("MovementPredictor", () => {
     const bounded = new MovementPredictor({ playerId: 1, maxPendingBatches: 4 });
     bounded.applySnapshot(snap(0, [entity(1)]));
     for (let i = 1; i <= 20; i++) {
-      bounded.queueCommand([{ c: "move", ids: [1], x: i, y: 0 }], i, `batch-${i}`);
+      bounded.queueCommand([{ c: "move", ids: [1], x: i, z: 0 }], i, `batch-${i}`);
     }
     // Unbounded growth here is a leak on a laggy connection.
     expect(bounded.pendingCount()).toBe(4);

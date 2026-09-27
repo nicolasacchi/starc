@@ -91,7 +91,12 @@ function wobble(time: number, seed: number): number {
 }
 
 export class RtsCamera {
-  private readonly camera: THREE.PerspectiveCamera;
+  /**
+   * The camera this rig drives. Public read-only: callers that own the
+   * `PerspectiveCamera` need it for frustum culling, unprojection and effect
+   * anchoring, and reading it back is the only way to observe shake.
+   */
+  readonly camera: THREE.PerspectiveCamera;
   private readonly domElement: HTMLElement | null;
   private readonly map: MapDef;
 

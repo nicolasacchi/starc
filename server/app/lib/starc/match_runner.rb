@@ -394,7 +394,13 @@ module Starc
       @world.forfeit(expired.first, "disconnect")
     end
 
+    # `finalize!` is idempotent: the replay row is unique per match and the
+    # `game:ended` broadcast happens once. A second call — or a loop that
+    # finalises again after a rescue — would otherwise end the match twice as
+    # far as the clients are concerned.
     def finalize!
+      return nil unless claim_finalize
+
       result = end_result
       # The replay is written before anyone is told the match ended, so the
       # `replay_url` in `game:ended` already resolves.
@@ -406,6 +412,15 @@ module Starc
       forget
     ensure
       @mutex.synchronize { @thread = nil }
+    end
+
+    # True exactly once per runner, under the world lock.
+    def claim_finalize
+      @mutex.synchronize do
+        next false if @finalized
+
+        @finalized = true
+      end
     end
 
     def persist(result)
@@ -527,17 +542,20 @@ module Starc
       end
     end
 
+    # The ground plane is x/z since the axis change (PROTOCOL.md §3), so the
+    # roster has to be stamped with `z`: emitting `y` sends every player to
+    # 0 on the second axis, i.e. the world edge.
     def start_players
       positions = start_positions
       roster.map do |player|
-        point = positions[player[:slot]] || positions.first || { "x" => 32.0, "y" => 32.0 }
+        point = positions[player[:slot]] || positions.first || { "x" => 32.0, "z" => 32.0 }
         {
           player_id: player[:id],
           slot: player[:slot],
           race: player[:race],
           name: player[:name],
           team: player[:team],
-          start: { x: point["x"].to_f, y: point["y"].to_f }
+          start: { x: point["x"].to_f, z: point["z"].to_f }
         }
       end
     end

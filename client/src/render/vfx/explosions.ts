@@ -329,6 +329,7 @@ export class ExplosionSystem {
     this.ringMaterial = new THREE.ShaderMaterial({
       uniforms: { uTime: { value: 0 } },
       vertexShader: RING_VERT,
+      fragmentShader: RING_FRAG,
       transparent: true,
       depthWrite: false,
       blending: THREE.NormalBlending,

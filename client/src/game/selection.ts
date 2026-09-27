@@ -116,6 +116,7 @@ export class SelectionManager {
   lastOverflow = 0;
 
   private lastClickTime = Number.NEGATIVE_INFINITY;
+  private lastClickModified = false;
   private readonly max: number;
 
   constructor(opts: { max?: number } = {}) {
@@ -175,12 +176,19 @@ export class SelectionManager {
   /**
    * Records a click and reports whether it completed a double-click on the
    * same entity. `timeMs` comes from the caller's clock, so this stays pure.
+   * `modified` marks a click that held shift or ctrl: a shift-click right
+   * after a plain click is a toggle, not the second half of a double-click,
+   * so the two only pair up when they agree.
    */
-  noteClick(id: number | null, timeMs: number): boolean {
+  noteClick(id: number | null, timeMs: number, modified = false): boolean {
     const isDouble =
-      id !== null && id === this.lastClickedId && timeMs - this.lastClickTime <= DOUBLE_CLICK_MS;
+      id !== null &&
+      id === this.lastClickedId &&
+      modified === this.lastClickModified &&
+      timeMs - this.lastClickTime <= DOUBLE_CLICK_MS;
     this.lastClickedId = id;
     this.lastClickTime = timeMs;
+    this.lastClickModified = modified;
     return isDouble;
   }
 

@@ -133,6 +133,8 @@ const _nightColor = new THREE.Color();
 const _dayZenith = new THREE.Color();
 const _nightZenith = new THREE.Color();
 const _horizon = new THREE.Color();
+/** Scratch for the moon direction, which shares the sky evaluation with `_temp`. */
+const _moonDirection = new THREE.Vector3();
 
 /**
  * Evaluates the whole sky model for a clock reading into `out`.
@@ -179,14 +181,14 @@ export function sunStateFor(timeOfDay: number, out: SunState, mapTint?: THREE.Co
     .normalize();
   if (w < 1) {
     const nightAzimuth = azimuth + Math.PI;
-    _temp
+    _moonDirection
       .set(
         Math.cos(nightHeight * MAX_MOON_ELEVATION) * Math.cos(nightAzimuth),
         Math.sin(nightHeight * MAX_MOON_ELEVATION),
         Math.cos(nightHeight * MAX_MOON_ELEVATION) * Math.sin(nightAzimuth),
       )
       .normalize();
-    out.direction.lerp(_temp, 1 - w).normalize();
+    out.direction.lerp(_moonDirection, 1 - w).normalize();
   }
 
   out.color.copy(_nightColor).lerp(_dayColor, w);

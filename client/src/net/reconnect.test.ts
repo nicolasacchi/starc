@@ -21,6 +21,20 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * A promise the test opens by hand, standing in for a reconnect attempt that
+ * is still in flight. `Promise.withResolvers` is the natural spelling, but the
+ * project's `lib` predates es2024, so the executor form is the one that
+ * typechecks here.
+ */
+function deferred(): { promise: Promise<void>; open: () => void } {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
+
 class FakeTimer implements TimerApi {
   readonly delays: number[] = [];
   private readonly pending = new Map<TimerHandle, () => void>();
@@ -221,7 +235,7 @@ describe("ReconnectController loop", () => {
 
   it("reports the attempt as in flight until it settles", async () => {
     const timer = new FakeTimer();
-    const gate = Promise.withResolvers<void>();
+    const gate = deferred();
     const controller = new ReconnectController(() => gate.promise, { timer });
 
     controller.notifyLoss();
@@ -229,7 +243,7 @@ describe("ReconnectController loop", () => {
     await flush();
     expect(controller.connecting).toBe(true);
 
-    gate.resolve();
+    gate.open();
     await fired;
     expect(controller.connecting).toBe(false);
     expect(controller.active).toBe(false);

@@ -423,7 +423,7 @@ export class FloatingText {
     entry.life = options.lifeSeconds ?? 1.2;
     entry.size = options.size ?? 0.7;
     entry.rise = options.rise ?? 1.5;
-    this.colorScratch.set(options.color ?? 0xffffff, THREE.SRGBColorSpace);
+    this.colorScratch.setHex(options.color ?? 0xffffff, THREE.SRGBColorSpace);
     entry.r = this.colorScratch.r;
     entry.g = this.colorScratch.g;
     entry.b = this.colorScratch.b;

@@ -182,11 +182,12 @@ function defaultScheduler(): { raf: (cb: (timeMs: number) => void) => number; ca
       caf: (h) => cancelAnimationFrame(h),
     };
   }
-  // Node, and any environment without a display: a 60 Hz timer keeps the loop
-  // drivable instead of silently doing nothing. Under this project's lib set
-  // `setTimeout` hands back the DOM `number` handle.
+  // Node, and any environment without a display: a ~60 Hz timer keeps the loop
+  // drivable instead of silently doing nothing. `setTimeout` hands back a DOM
+  // `number` in a browser and a Node `Timeout` here, so the handle is cast
+  // back to the number the scheduler contract uses.
   return {
-    raf: (cb) => setTimeout(() => cb(defaultNow()), 16),
+    raf: (cb) => setTimeout(() => cb(defaultNow()), 16) as unknown as number,
     caf: (h) => clearTimeout(h),
   };
 }

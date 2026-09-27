@@ -249,7 +249,7 @@ function makePuffField(count: number, color: number): PuffField {
     fragmentShader: PUFF_FRAG,
     uniforms: {
       uMap: { value: puffTexture() },
-      uColor: { value: new THREE.Color(color, THREE.SRGBColorSpace) },
+      uColor: { value: new THREE.Color().setHex(color, THREE.SRGBColorSpace) },
     },
     transparent: true,
     depthWrite: false,
@@ -351,7 +351,7 @@ export class BuildingView extends AbstractEntityView {
       fragmentShader: RING_FRAG,
       uniforms: {
         uProgress: { value: 0 },
-        uColor: { value: new THREE.Color(0x63e08a, THREE.SRGBColorSpace) },
+        uColor: { value: new THREE.Color().setHex(0x63e08a, THREE.SRGBColorSpace) },
       },
       transparent: true,
       depthWrite: false,
@@ -442,7 +442,7 @@ export class BuildingView extends AbstractEntityView {
    * going up, training progress once it is complete. The sim only sends `prog`
    * while it is strictly between 0 and 1, so 0 means "finished or not started".
    */
-  override setOrder(_order: OrderKind, _targetX: number, _targetZ: number, progress: number): void {
+  setOrder(_order: OrderKind, _targetX: number, _targetZ: number, progress: number): void {
     this.progress = Math.max(0, Math.min(1, progress));
   }
 

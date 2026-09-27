@@ -235,7 +235,7 @@ export function buildTerrain(scene: THREE.Scene, map: MapDef, settings: QualityS
     },
     dispose(): void {
       scene.remove(mesh);
-      mesh.customDepthMaterial = null;
+      mesh.customDepthMaterial = undefined;
       geometry.dispose();
       depthMaterial.dispose();
       handle.dispose();

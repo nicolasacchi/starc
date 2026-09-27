@@ -231,7 +231,10 @@ class LobbyChannel < ApplicationCable::Channel
     match_id = context && context["match_id"]
     return if match_id == @chat_match_id
 
-    stop_stream(Starc::LobbyRegistry.match_chat_stream(@chat_match_id)) if @chat_match_id
+    # Rails 8.1 spells this `stop_stream_from`; `stop_stream` raises
+    # NoMethodError, which aborted `lobby:leave` after the seat row was already
+    # deleted, so the client never got an `announce_state`.
+    stop_stream_from(Starc::LobbyRegistry.match_chat_stream(@chat_match_id)) if @chat_match_id
     @chat_match_id = match_id
     return if match_id.nil?
 
@@ -271,7 +274,9 @@ class LobbyChannel < ApplicationCable::Channel
     return nil if seat.nil?
 
     match = Match.find_by(id: seat.match_id)
-    return nil if match.nil? || match.finished? || match.abandoned?
+    # A running match is GameChannel's business: its forfeit countdown would
+    # fight the lobby abandoning the match on a tab close.
+    return nil if match.nil? || match.in_progress? || match.finished? || match.abandoned?
 
     match
   end
@@ -340,7 +345,9 @@ class LobbyChannel < ApplicationCable::Channel
     value = requested.is_a?(Integer) ? requested : Integer(requested.to_s, exception: false)
     value = MIN_PLAYERS if value.nil? || value < MIN_PLAYERS
     value = MAX_PLAYERS if value > MAX_PLAYERS
-    cap = map && map["max_players"].to_i
+    # `map` is nil when only `max_players` was sent, so `cap` has to be a real
+    # Integer — `nil.positive?` would raise instead of rejecting the payload.
+    cap = map ? map["max_players"].to_i : 0
     value = cap if cap.positive? && value > cap
     value
   end

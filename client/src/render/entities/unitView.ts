@@ -300,7 +300,7 @@ export class UnitView extends AbstractEntityView {
 
     const pitch = this.isAir
       ? speedFactor * 0.24
-      : moving * speedFactor * 0.2 + Math.max(-0.4, Math.min(0.4, slopeZ * conform));
+      : (moving ? speedFactor : 0) * 0.2 + Math.max(-0.4, Math.min(0.4, slopeZ * conform));
     const roll = this.isAir
       ? this.bank * 0.9
       : this.bank * 0.35 + sway * 0.6 + Math.max(-0.4, Math.min(0.4, -slopeX * conform));
@@ -401,8 +401,9 @@ export class UnitBatchRenderer {
     const o = bucket.count * 16;
     // Yaw-only rotation written straight into the matrix, no Matrix4 needed.
     // Local +Z is forward, matching the rig's facing convention.
-    const c = Math.cos(view.angle);
-    const s = Math.sin(view.angle);
+    const yaw = view.group.rotation.y;
+    const c = Math.cos(yaw);
+    const s = Math.sin(yaw);
     m[o] = c;
     m[o + 1] = 0;
     m[o + 2] = -s;

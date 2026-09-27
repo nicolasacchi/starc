@@ -6,9 +6,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { TypedEmitter } from "./events";
 
+/** Event name → payload, the shape {@link TypedEmitter} is generic over. */
 interface Events {
-  tick: (n: number) => void;
-  explode: (why: string) => void;
+  tick: number;
+  explode: string;
 }
 
 describe("TypedEmitter", () => {
@@ -26,7 +27,7 @@ describe("TypedEmitter", () => {
 
   it("stops delivering after the function returned by on() is called", () => {
     const bus = new TypedEmitter<Events>();
-    const handler = vi.fn();
+    const handler = vi.fn<(n: number) => void>();
     const off = bus.on("tick", handler);
 
     bus.emit("tick", 1);
@@ -39,7 +40,7 @@ describe("TypedEmitter", () => {
 
   it("tolerates the unsubscribe handle being called twice", () => {
     const bus = new TypedEmitter<Events>();
-    const handler = vi.fn();
+    const handler = vi.fn<(n: number) => void>();
     const off = bus.on("tick", handler);
 
     bus.emit("tick", 1);
@@ -56,7 +57,7 @@ describe("TypedEmitter", () => {
 
   it("fires a once() listener exactly once across repeated emits", () => {
     const bus = new TypedEmitter<Events>();
-    const handler = vi.fn();
+    const handler = vi.fn<(n: number) => void>();
     bus.once("tick", handler);
 
     bus.emit("tick", 1);
@@ -69,7 +70,7 @@ describe("TypedEmitter", () => {
 
   it("keeps delivering to the remaining listeners when one throws", () => {
     const bus = new TypedEmitter<Events>();
-    const after = vi.fn();
+    const after = vi.fn<(why: string) => void>();
     bus.on("explode", () => {
       throw new Error("listener blew up");
     });
@@ -83,7 +84,7 @@ describe("TypedEmitter", () => {
 
   it("keeps delivering when a listener unsubscribes itself mid-emit", () => {
     const bus = new TypedEmitter<Events>();
-    const later = vi.fn();
+    const later = vi.fn<(n: number) => void>();
     const off = bus.on("tick", () => off());
     bus.on("tick", later);
 
@@ -94,8 +95,8 @@ describe("TypedEmitter", () => {
 
   it("off(type) drops every listener of that type and no other", () => {
     const bus = new TypedEmitter<Events>();
-    const tick = vi.fn();
-    const explode = vi.fn();
+    const tick = vi.fn<(n: number) => void>();
+    const explode = vi.fn<(why: string) => void>();
     bus.on("tick", tick);
     bus.on("tick", tick);
     bus.on("explode", explode);

@@ -148,8 +148,9 @@ function finishTexture(data: Uint8Array, size: number, anisotropy: number, name:
 }
 
 /**
- * One atlas: scorch in the top half, blood in the bottom. Both are radial
- * falloffs pushed around by noise, so no two marks look stamped from one mould.
+ * One atlas: scorch in the first half of the rows, blood in the second.
+ * Both are radial falloffs pushed around by noise, so no two marks look
+ * stamped from one mould.
  */
 function decalAtlas(size: number, anisotropy: number): THREE.DataTexture {
   const data = new Uint8Array(size * size * 4);

@@ -40,10 +40,9 @@ import { createRenderer } from "@render/core/renderer";
 import { createScene, disposeScene } from "@render/core/scene";
 import { PostFXPipeline } from "@render/core/postfx";
 import { RtsCamera } from "@render/core/camera";
-import type { TerrainHandle } from "@render/terrain/terrainMesh";
-import { buildTerrain } from "@render/terrain/terrainMesh";
+import { buildTerrain, type Terrain } from "@render/terrain/terrainMesh";
 import { SkyDome } from "@render/sky/skyDome";
-import { WaterPlane } from "@render/water/waterPlane";
+import { createWaterPlane, type WaterPlane } from "@render/water/waterPlane";
 import { LightingRig } from "@render/lighting/lighting";
 import { ShadowSystem } from "@render/lighting/shadows";
 import { EnvironmentProbe } from "@render/lighting/environment";
@@ -91,7 +90,7 @@ const PROJECTILE_BY_WEAPON: Record<string, ProjectileKind> = {
 };
 
 /** Hot white tracer for instant-fire weapons. */
-const TRACER_COLOR = new THREE.Color(0xfff0c0, THREE.SRGBColorSpace);
+const TRACER_COLOR = new THREE.Color().setHex(0xfff0c0, THREE.SRGBColorSpace);
 
 /** Wire `sel` code → relation. The sim sends 0 for the viewer's own units. */
 function relationFromSel(sel: ProtocolEntity["sel"]): Relation {
@@ -156,7 +155,7 @@ export class SceneManager {
   private perspective: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer | null = null;
   private postfx: PostFXPipeline | null = null;
-  private terrainHandle: TerrainHandle | null = null;
+  private terrainHandle: Terrain | null = null;
   private sky: SkyDome | null = null;
   private water: WaterPlane | null = null;
   private lighting: LightingRig | null = null;
@@ -251,7 +250,7 @@ export class SceneManager {
 
     this.terrainHandle = buildTerrain(this.scene, this.map, settings);
     this.sky = new SkyDome(this.scene, this.map, settings);
-    this.water = new WaterPlane(this.scene, this.map, settings);
+    this.water = createWaterPlane(this.scene, this.map, settings);
     this.lighting = new LightingRig(this.scene, this.map, settings);
     this.shadows = new ShadowSystem(this.scene, settings);
     this.environment = this.renderer === null
@@ -513,7 +512,7 @@ export class SceneManager {
     this.batch?.end();
 
     this.sky?.update(this.elapsed);
-    this.water?.update(this.elapsed, this.perspective);
+    this.water?.update(this.elapsed, this.perspective.position);
     this.lighting?.update(this.elapsed);
     this.shadows?.update(this.perspective, this.terrain);
     this.environment?.update();

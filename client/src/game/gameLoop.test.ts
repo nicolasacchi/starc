@@ -5,7 +5,14 @@
  * the loop running and keeps burning frames after the screen is gone.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_MAX_CATCH_UP_STEPS, DEFAULT_MAX_DELTA, DEFAULT_STEP_SECONDS, GameLoop } from "./gameLoop";
+import type { Mock } from "vitest";
+import {
+  DEFAULT_MAX_CATCH_UP_STEPS,
+  DEFAULT_MAX_DELTA,
+  DEFAULT_STEP_SECONDS,
+  GameLoop,
+} from "./gameLoop";
+import type { GameLoopOptions } from "./gameLoop";
 
 /** A rAF pair the test drives by hand; nothing here touches a real display. */
 function fakeScheduler() {
@@ -37,11 +44,11 @@ function fakeScheduler() {
 
 describe("GameLoop", () => {
   let raf: ReturnType<typeof fakeScheduler>;
-  let update: ReturnType<typeof vi.fn>;
-  let render: ReturnType<typeof vi.fn>;
+  let update: Mock<(dt: number, frameDt: number) => void>;
+  let render: Mock<(frameDt: number) => void>;
   let clock: number;
 
-  function makeLoop(options: Parameters<typeof GameLoop.prototype.constructor>[0] = {}): GameLoop {
+  function makeLoop(options: Partial<GameLoopOptions> = {}): GameLoop {
     return new GameLoop({
       update,
       render,
@@ -54,8 +61,8 @@ describe("GameLoop", () => {
 
   beforeEach(() => {
     raf = fakeScheduler();
-    update = vi.fn();
-    render = vi.fn();
+    update = vi.fn<(dt: number, frameDt: number) => void>();
+    render = vi.fn<(frameDt: number) => void>();
     clock = 0;
   });
 

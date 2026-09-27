@@ -18,16 +18,25 @@ module Starc
 
     attr_reader :match
 
-    # `command` is the wire hash exactly as the client sent it.
+    # `command` is the wire hash exactly as the client sent it. The stamp is
+    # written *after* the merge: a client that puts `index`, `tick` or
+    # `player_id` in its command would otherwise overwrite the recorded stamp
+    # and could attribute the command to another player or another tick, which
+    # breaks the determinism guarantee of PROTOCOL.md §8.
     def record(tick:, player_id:, index:, command:)
-      entry = { "tick" => tick.to_i, "player_id" => player_id.to_i, "index" => index.to_i }
+      entry = {}
       command.each { |key, value| entry[key.to_s] = value }
+      entry["tick"] = tick.to_i
+      entry["player_id"] = player_id.to_i
+      entry["index"] = index.to_i
       @mutex.synchronize { @commands << entry }
       entry
     end
 
+    # A deep-enough copy: the entries themselves have to be copies, or a caller
+    # mutating a returned entry would corrupt the recording `finalize!` writes.
     def commands
-      @mutex.synchronize { @commands.dup }
+      @mutex.synchronize { @commands.map(&:dup) }
     end
 
     def command_count

@@ -31,7 +31,12 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       output: {
-        manualChunks: { three: ["three"] },
+        // Vite 8 bundles with Rolldown, which only accepts the function form
+        // of manualChunks — the object form was removed.
+        manualChunks(id: string) {
+          if (id.includes("node_modules/three")) return "three";
+          return undefined;
+        },
       },
     },
   },

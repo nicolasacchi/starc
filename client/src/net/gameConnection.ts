@@ -395,9 +395,15 @@ export class GameConnection {
   }
 
   /**
-   * Blends the world for this frame, then overrides own units still running an
-   * unacknowledged order with their predicted position. Pass an explicit
-   * `renderTimeMs` to render a fixed instant (replays, tests).
+   * Blends the world for this frame with {@link Interpolator}, then overrides
+   * own units still running an unacknowledged order with their predicted
+   * position. Pass an explicit `renderTimeMs` to render a fixed instant
+   * (replays, tests).
+   *
+   * Exactly one interpolation path may run: if the renderer already blends
+   * `onSnapshot` entities itself, leave this alone — calling both smooths the
+   * same data twice and shows a frame of extra latency. Raw snapshots still
+   * reach `onSnapshot` and the metrics either way.
    */
   sampleWorld(renderTimeMs?: number): WorldSample {
     const newest = this.snapshots.latest();

@@ -104,8 +104,8 @@ function landingPad(b: Build, top: number, w: number, d: number, tone: PartTone 
   b.parts.add(taperedBox(w, slab, d, 0.92), tone, { y: top - slab });
   for (const side of [1, -1]) {
     b.parts.add(taperedBox(w, 0.03, d * 0.05, 1), TONES.accent, { y: top, z: side * d * 0.47 });
-    b.parts.add(taperedBox(w * 0.06, 0.03, d, 1), TONES.accent, { x: w * 0.3, y });
-    b.parts.add(taperedBox(w * 0.06, 0.03, d, 1), TONES.accent, { x: -w * 0.3, y });
+    b.parts.add(taperedBox(w * 0.06, 0.03, d, 1), TONES.accent, { x: w * 0.3, y: top });
+    b.parts.add(taperedBox(w * 0.06, 0.03, d, 1), TONES.accent, { x: -w * 0.3, y: top });
   }
   struts(b, 4, Math.min(w, d) * 0.44, top - slab, w * 0.045);
 }

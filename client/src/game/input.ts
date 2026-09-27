@@ -730,7 +730,7 @@ export class InputController {
       ? this.opts.getEntities().find((e) => e.id === drag.target?.id && e.st !== "dead")
       : undefined;
     const target = seen ?? null;
-    const isDouble = this.selection.noteClick(target?.id ?? null, this.clock());
+    const isDouble = this.selection.noteClick(target?.id ?? null, this.clock(), drag.shift);
     if (target) {
       if (isDouble && target.pl === this.playerId) {
         const result = this.selection.selectSameType(target.id, this.opts.getEntities(), {

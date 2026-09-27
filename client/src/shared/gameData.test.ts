@@ -23,7 +23,6 @@ import {
   startingUnit,
   unitKeys,
 } from "./gameData";
-import type { Race } from "./protocol";
 
 describe("shared game data", () => {
   it("defines exactly three races", () => {

@@ -7,9 +7,9 @@
  * Type safety comes from a map interface:
  *
  * ```ts
- * interface Events { tick: (n: number) => void }
+ * interface Events { tick: number; explode: string }
  * const bus = new TypedEmitter<Events>();
- * const off = bus.on("tick", (n) => n * 2);
+ * const off = bus.on("tick", (n: number) => { console.log(n); });
  * ```
  *
  * Every `on` returns an unsubscribe function; `once` self-unsubscribes after

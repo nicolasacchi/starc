@@ -236,12 +236,20 @@ function flipWinding(geometry: THREE.BufferGeometry): void {
   geometry.computeVertexNormals();
 }
 
-function swapTriangleVertices(attr: THREE.BufferAttribute, components: number): void {
-  const data = attr.array as Float32Array;
+function swapTriangleVertices(
+  attr: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+  components: number,
+): void {
+  // An interleaved attribute has no array of its own: read and write through
+  // the shared buffer at this attribute's offset and stride.
+  const interleaved = attr instanceof THREE.InterleavedBufferAttribute;
+  const data = interleaved ? attr.data.array : attr.array;
+  const stride = interleaved ? attr.data.stride : attr.itemSize;
+  const offset = interleaved ? attr.offset : 0;
   for (let i = 0; i + 2 < attr.count; i += 3) {
     for (let k = 0; k < components; k++) {
-      const a = (i + 1) * components + k;
-      const b = (i + 2) * components + k;
+      const a = offset + (i + 1) * stride + k;
+      const b = offset + (i + 2) * stride + k;
       const swap = data[a] as number;
       data[a] = data[b] as number;
       data[b] = swap;

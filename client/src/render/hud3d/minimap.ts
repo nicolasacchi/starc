@@ -186,7 +186,7 @@ export class Minimap {
     this.ramp = BIOME_RAMP[map.biome] ?? DEFAULT_RAMP;
     this.basePixels = new Uint8ClampedArray(this.resolution * this.resolution * 4);
     this.framePixels = new Uint8ClampedArray(this.resolution * this.resolution * 4);
-    this.sun = new THREE.Color(map.lighting.sun_color, THREE.SRGBColorSpace);
+    this.sun = new THREE.Color().setStyle(map.lighting.sun_color, THREE.SRGBColorSpace);
 
     this.bakeTerrain();
     this.drawStaticMarkers();

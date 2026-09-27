@@ -5,14 +5,14 @@
  * and coming back rejected, or a reconnect that leaves the pre-drop world on
  * screen as ghosts.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   GameConnection,
   MAX_COMMANDS_PER_BATCH,
   MAX_IDS_PER_COMMAND,
 } from "./gameConnection";
 import type {
-  GameEndEventForTest,
+  GameEndedMessage,
   GameStartMessage,
   GameSnapshotMessage,
 } from "./gameConnection";
@@ -24,8 +24,6 @@ const URL = "wss://cable.example.test/cable";
 const TOKEN = "session-token";
 const MATCH = 7;
 const ME = 1;
-
-type TimerHandle = number;
 
 class FakeTransport implements ChannelTransport {
   state: TransportState = "idle";
@@ -127,6 +125,7 @@ class FakeTimer {
   async fireAll(): Promise<void> {
     while (this.pending.size > 0) {
       const entry = this.pending.entries().next();
+      if (entry.done) throw new Error("no timer is scheduled");
       this.pending.delete(entry.value[0]);
       entry.value[1]();
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -366,7 +365,7 @@ describe("GameConnection", () => {
     it("delivers start, snapshot and end, and stops after unsubscribe", async () => {
       const starts: GameStartMessage[] = [];
       const shots: number[] = [];
-      const ends: GameEndEventForTest[] = [];
+      const ends: GameEndedMessage[] = [];
       const offStart = connection.onStart((m) => starts.push(m));
       connection.onSnapshot((m) => shots.push(m.tick));
       const offEnd = connection.onEnd((m) => ends.push(m));

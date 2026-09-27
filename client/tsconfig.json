@@ -22,6 +22,7 @@
     "noUncheckedIndexedAccess": false,
     "exactOptionalPropertyTypes": false,
     "types": [
+      "node",
       "vitest/globals",
       "@types/three"
     ],

@@ -15,6 +15,7 @@
     "e2e": "vitest run e2e"
   },
   "devDependencies": {
+    "@types/node": "^26.6.3",
     "@vitest/coverage-v8": "^5.0.2",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",

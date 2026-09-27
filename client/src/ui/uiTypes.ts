@@ -15,7 +15,8 @@ import { GAME, raceColor } from "@shared/gameData";
 import type { Race } from "@shared/protocol";
 
 /** Opaque handle for a timer the UI schedules and must cancel on dispose. */
-export type TimerHandle = number;
+/** Whatever `setTimeout` returns in this environment (DOM number, or Node Timeout). */
+export type TimerHandle = ReturnType<typeof setTimeout>;
 
 /* ------------------------------------------------------------------ */
 /* Screen contracts                                                    */
@@ -301,7 +302,7 @@ export interface FieldSpec {
   type?: string;
   placeholder?: string;
   value?: string;
-  autocomplete?: string;
+  autocomplete?: AutoFill;
   maxLength?: number;
   hint?: string;
 }
