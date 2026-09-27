@@ -10,6 +10,22 @@ terrain relief, green biome albedo, atmospheric recession, the HUD on top, and
 live resources and supply. Screenshots: `tmp/shots/FINAL-game.png`,
 `FINAL-pan.png`, `PLAYING.png`, `base-and-workers-magnified.png`.
 
+## `high` and `ultra` — verified, and the attempt found a real bug
+
+`tmp/shots/ULTRA-GAME.png` is a live `ultra` frame: terrain behind a populated
+HUD, 210 minerals, live supply, both bases on the minimap, **zero shader
+errors** in the console.
+
+Getting that far is what closed the last gap. The first `ultra` attempt threw
+eight GLSL compile errors and every race material fell back to three's error
+material: the injected chunk body referenced uniforms as `uChunkScale.value`,
+which is three.js's JavaScript `Uniform` accessor and illegal in a shader. It
+compiled at `low` because those chunks are not requested there, and it was
+invisible to the unit suite because nothing constructs the injection in a
+context that compiles GLSL. Fixed, with thirteen regression tests; a
+neighbouring latent failure — the emissive scan reading `uTime` when only the
+time/panel/fresnel options declared it — went at the same time.
+
 ## `medium` — verified that the world renders, not a smear
 
 This was the acceptance criterion for the post-FX fix, and it is met:
