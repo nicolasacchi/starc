@@ -11,6 +11,11 @@ module Api
       TICK_RATE = 20
       SNAPSHOT_RATE = 10
 
+      # How long a forfeit waits for the runner to persist the result. The
+      # runner finalises within one 50 ms step, so this is generous; it exists
+      # to bound the request, not to wait for anything slow.
+      FORFEIT_FINALIZE_TIMEOUT_SECONDS = 5.0
+
       before_action :require_auth!, except: %i[index show replay replay_file]
 
       # GET /api/v1/matches
@@ -125,6 +130,11 @@ module Api
         match = find_match!(params[:id])
         return render_error("not_found", "No such match", :not_found) if match.nil?
         return render_error("match_in_progress", "A running match cannot be left", :conflict) if match.in_progress?
+        # A match that already ended is history: the seat row is what carries
+        # the player's result, and `remove_player!` destroys it. Leaving then
+        # silently erased a finished match from `recent_matches` (and dropped
+        # the result every ranking reads), so only a lobby seat can be given up.
+        return render_error("match_finished", "That match is already over", :conflict) unless match.lobby?
 
         seat = seat_for(match)
         return render_error("not_found", "You are not in that match", :not_found) if seat.nil?
@@ -192,6 +202,12 @@ module Api
       end
 
       # POST /api/v1/matches/:id/forfeit
+      # The forfeit is the simulation's decision, not the database's. Routing
+      # it through the runner is what stops the tick thread, writes the replay,
+      # credits the career counters and emits the single `game:ended` clients
+      # act on. Writing the rows here instead left the world stepping and
+      # broadcasting against a match the database had already called finished,
+      # and sent a second, differently-shaped `game:ended` after the first.
       def forfeit
         match = find_match!(params[:id])
         return render_error("not_found", "No such match", :not_found) if match.nil?
@@ -200,13 +216,19 @@ module Api
         seat = seat_for(match)
         return render_error("not_found", "You are not in that match", :not_found) if seat.nil?
 
-        opponents = match.match_players.where.not(player_id: current_player.id).ordered.to_a
-        winner = opponents.first
-        seat.update!(result: :loss)
-        opponents.each { |row| row.update!(result: row.id == winner&.id ? :win : :loss) }
-        match.finish!(winner_player_id: winner&.player_id, reason: "forfeit", ended_at: Time.current)
-        broadcast_game_ended(match)
-        render_ok(match: match_json_for(match, current_player))
+        # A match this process has not adopted yet — started over REST, or left
+        # running by a restart — has no runner to forfeit in, so it is adopted
+        # here rather than decided behind the simulation's back.
+        runner = Starc::MatchRunner.for(match.id) || Starc::MatchRunner.adopt(match)
+        if runner.nil?
+          return render_error("server_error", "that match is not being simulated on this server",
+                              :internal_server_error)
+        end
+
+        runner.player_forfeits(current_player.id)
+        return unless await_finalized(match)
+
+        render_ok(match: match_json_for(match.reload, current_player))
       end
 
       # GET /api/v1/matches/:id/replay
@@ -288,19 +310,31 @@ module Api
         raise ArgumentError, "no runner for match #{match.id} — the match was never started"
       end
 
-      def game_ended_payload(match)
-        started = match.started_at || match.created_at
-        {
-          v: 1,
-          t: "game:ended",
-          ts: (Time.current.to_f * 1000).to_i,
-          tick: 0,
-          winner: match.winner_player_id,
-          reason: match.end_reason.presence || "stalemate",
-          duration_ms: match.duration_ms || ((Time.current - started) * 1000).to_i,
-          scores: match.players_ordered.map(&:to_score_hash),
-          replay_url: "/api/v1/matches/#{match.id}/replay"
-        }
+      # The end of a match is decided, persisted and announced by the runner's
+      # tick thread, one step after it is told. A forfeit that answered before
+      # that happened reported `in_progress`, a roster with no results and a
+      # `replay_url` that resolved to nothing.
+      #
+      # The registry is the signal, not the match row: the runner deregisters
+      # itself at the very end of `finalize!`, after the results are written
+      # and `game:ended` has gone out. The wait is bounded, so a runner that
+      # dies leaves the caller with an error instead of a hung request.
+      def await_finalized(match)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + FORFEIT_FINALIZE_TIMEOUT_SECONDS
+        until finalized?(match)
+          break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+
+          sleep 0.01
+        end
+        return true if finalized?(match)
+
+        render_error("server_error", "the match did not finish; the forfeit may not have been applied",
+                     :internal_server_error)
+        false
+      end
+
+      def finalized?(match)
+        Starc::MatchRunner.for(match.id).nil? && match.reload.finished?
       end
 
       # ------------------------------------------------------------ channel
@@ -309,12 +343,6 @@ module Api
         ActionCable.server.broadcast("game:#{match.id}", game_start_payload(match).to_json)
       rescue StandardError => e
         Rails.logger.warn("[starc] game:start broadcast failed: #{e.message}")
-      end
-
-      def broadcast_game_ended(match)
-        ActionCable.server.broadcast("game:#{match.id}", game_ended_payload(match).to_json)
-      rescue StandardError => e
-        Rails.logger.warn("[starc] game:ended broadcast failed: #{e.message}")
       end
 
       def broadcast_lobby_state(match)

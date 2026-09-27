@@ -20,9 +20,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { App } from "./app";
 import type { SceneSnapshot } from "@render/entities/sceneManager";
-import type { GameSnapshotMessage, GameStartMessage } from "@net/gameConnection";
+import type { GameConnection, GameSnapshotMessage, GameStartMessage } from "@net/gameConnection";
 import type { ChannelTransport, ServerDisconnect, TransportState } from "@net/transport";
-import type { ClientMessage, ProtocolEntity, ServerMessage } from "@shared/protocol";
+import type { ClientMessage, Command, ProtocolEntity, ServerMessage } from "@shared/protocol";
 import type { LobbyState } from "@net/lobbyClient";
 import { setIconDocument } from "@ui/icons";
 import { setAuthToken } from "@net/api";
@@ -216,6 +216,11 @@ class WorldScene {
     return found ? { x: found.x, z: found.z } : null;
   }
 
+  /** The colour state the renderer was handed for an entity. */
+  selOf(id: number): ProtocolEntity["sel"] {
+    return this.live.get(id)?.sel;
+  }
+
   /** The minimap viewport rect is picked off the camera; no ground here. */
   screenToGround(): boolean {
     return false;
@@ -309,6 +314,11 @@ function entity(id: number, over: Partial<ProtocolEntity> = {}): ProtocolEntity 
   } as ProtocolEntity;
 }
 
+/** A unit that can actually walk — `entity` is a command centre for id 1. */
+function marine(id: number, over: Partial<ProtocolEntity> = {}): ProtocolEntity {
+  return { ...entity(id), ty: "marine", hp: 45, hp_max: 45, y: 0, x: 0, z: 0, ...over };
+}
+
 function startMessage(over: Partial<GameStartMessage> = {}): GameStartMessage {
   return {
     v: 1,
@@ -365,8 +375,18 @@ interface Harness {
   deliver(msg: ServerMessage): void;
   /** Advances every scheduled interval by `ms`, as the browser would. */
   advance(ms: number): void;
+  /**
+   * One rendered frame's worth of connection work — the same call
+   * `App.renderFrame` makes every frame. Driven explicitly because the game
+   * loop falls back to a real timer under node, and a test must not race it.
+   */
+  frame(deltaMs: number): void;
+  /** Issues commands exactly as a click on the game screen does. */
+  issue(commands: Command[]): void;
   visibleScreen(): string;
   overlayText(name: string): string | null;
+  /** The number on a resource chip, as the player reads it. */
+  chip(kind: "minerals" | "vespene"): string;
 }
 
 /** The game loop schedules real frames in node, so every app is torn down. */
@@ -395,6 +415,22 @@ function signIn(): void {
   });
   setAuthToken("test-token");
 }
+
+/**
+ * `App`'s connection and its command path are private, and the app is the
+ * only thing in the client that wires them together — which is precisely what
+ * these tests are about. The harness reaches them the way the browser does:
+ * by calling the same methods the game screen calls on a click and a frame.
+ */
+interface AppInternals {
+  conn: GameConnection | null;
+  send(commands: Command[]): void;
+}
+
+function internals(app: App): AppInternals {
+  return app as unknown as AppInternals;
+}
+
 
 
 async function harness(): Promise<Harness> {
@@ -428,6 +464,19 @@ async function harness(): Promise<Harness> {
         clock += 100;
         for (const { handler } of [...doc.defaultView.intervals.values()]) handler();
       }
+    },
+    frame: (deltaMs) => {
+      const conn = (app as unknown as { conn: GameConnection | null }).conn;
+      if (!conn) throw new Error("no connection: the match has not opened yet");
+      conn.tick(deltaMs);
+    },
+    issue: (commands) => {
+      internals(app).send(commands);
+    },
+    chip: (kind) => {
+      const node = doc.all(`chip--${kind}`)[0];
+      if (!node) throw new Error(`the ${kind} chip is not on screen`);
+      return textOf(node);
     },
     visibleScreen: () => {
       for (const screen of doc.all("screen")) {
@@ -510,5 +559,82 @@ describe("match entry", () => {
     h.advance(3_500);
     expect(h.overlayText("countdown")).toBeNull();
     expect(h.app.currentScreen).toBe("game");
+  });
+});
+
+/**
+ * The three things that reached no player because they were correct in
+ * isolation and unwired in production. Each test below drives the real app —
+ * a real connection, a real snapshot stream, a real renderer hand-off — so
+ * removing the wiring that connects them fails here even though every
+ * component involved still passes its own test.
+ */
+describe("what the player actually sees", () => {
+  it("shows the balance the server echoes, not a permanent zero", async () => {
+    const h = await harness();
+    enterRunningMatch(h);
+    h.deliver(startMessage());
+
+    h.deliver(snapshot(1, [entity(1, { pl: ME, res: 1_750 })]));
+    // `res` is the owning player's whole spendable balance, so a client reads
+    // its own figure off its own entities. Before the server emitted it at all,
+    // both chips read 0 for the entire match.
+    expect(h.chip("minerals")).toBe("1,750");
+
+    // The balance grew by 300 and the cargo event explains 50 of it, so the
+    // other 250 is geyser income: that is the split between the two chips.
+    h.deliver({
+      ...snapshot(2, [entity(1, { pl: ME, res: 2_050 })]),
+      events: [{ e: "res", pl: ME, amount: 50, x: 0, z: 0 }],
+    } as GameSnapshotMessage);
+    expect(h.chip("minerals")).toBe("1,800");
+    expect(h.chip("vespene")).toBe("250");
+  });
+
+  it("moves a unit on the frame after the click, before the server answers", async () => {
+    const h = await harness();
+    enterRunningMatch(h);
+    h.deliver(startMessage());
+    h.deliver(snapshot(1, [marine(1, { x: 0, z: 0 })]));
+    expect(h.scene.positionOf(1)).toEqual({ x: 0, z: 0 });
+
+    // The player right-clicks and the server has heard nothing yet: the next
+    // snapshot it sends still has the unit standing on the origin.
+    h.issue([{ c: "move", ids: [1], x: 100, z: 0 }]);
+    h.frame(100);
+    h.deliver(snapshot(2, [marine(1, { x: 0, z: 0, st: "idle" })]));
+    h.frame(100);
+
+    // Without prediction folded into the table the renderer is handed, the
+    // unit does not move until the server's answer arrives.
+    expect(h.scene.positionOf(1)!.x).toBeGreaterThan(0);
+
+    // And it settles back onto the server's position once the server has the
+    // order, rather than running ahead of it forever.
+    h.deliver(snapshot(3, [marine(1, { x: 0.4, st: "moving", ord: 1, ox: 100, oz: 0 })]));
+    expect(h.scene.positionOf(1)).toEqual({ x: 0.4, z: 0 });
+  });
+
+  it("colours the world from this viewer's own team table", async () => {
+    const h = await harness();
+    enterRunningMatch(h);
+    h.deliver(
+      startMessage({
+        players: [
+          { player_id: ME, slot: 0, race: "terran", name: "nik", team: 1, start: { x: 32, z: 32 } },
+          { player_id: 2, slot: 1, race: "zerg", name: "ally", team: 1, start: { x: 224, z: 32 } },
+          { player_id: 3, slot: 2, race: "terran", name: "mvp", team: 2, start: { x: 32, z: 224 } },
+        ],
+      }),
+    );
+
+    h.deliver(snapshot(1, [entity(1, { pl: ME }), entity(2, { pl: 2 }), entity(3, { pl: 3 })]));
+
+    // A snapshot is one broadcast, so the server cannot know which seat is
+    // reading it and `sel` never arrives. The client does know, from the team
+    // table in `game:start` — and the renderer colours off `sel`.
+    expect(h.scene.selOf(1)).toBe(1);
+    expect(h.scene.selOf(2)).toBe(2);
+    expect(h.scene.selOf(3)).toBe(3);
   });
 });

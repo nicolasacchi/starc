@@ -131,6 +131,12 @@ class LobbyChannel < ApplicationCable::Channel
     match = seat.match
     return reject_message("match_in_progress", "a running match cannot be left") if match.in_progress?
 
+    # A match that has already ended is history, and the seat row is where its
+    # result lives: `remove_player!` destroys it, which is how a finished match
+    # used to vanish from a player's history on a single `lobby:leave` — with no
+    # error, because only a *running* match was refused.
+    return reject_message("match_finished", "that match is already over") unless match.lobby?
+
     match.remove_player!(current_player)
     if match.player_count.zero?
       match.update!(status: :abandoned, ended_at: Time.current)

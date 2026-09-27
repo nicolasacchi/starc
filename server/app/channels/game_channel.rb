@@ -17,22 +17,30 @@ class GameChannel < ApplicationCable::Channel
     @match_id = params[:match_id].to_i
     @match = Match.find_by(id: @match_id)
     if @match.nil?
-      terminate!("not_found", "no match #{@match_id}")
+      refuse!("not_found", "no match #{@match_id}")
       return
     end
 
-    stream_from Starc::LobbyRegistry.game_stream(@match_id)
-
     # An unidentified connection is allowed to subscribe (PROTOCOL.md §1 has it
-    # `identify` first) but may do nothing else until it has.
+    # `identify` first) but may do nothing else until it has. The match stream
+    # is joined in `enter` rather than here, so a connection only ever carries
+    # a match it turned out to be a player of.
     enter(current_player) if current_player
   end
 
+  # Driven by the connection going away. Only a seated subscriber has a
+  # player to lose: a refused subscription, or one that never identified, must
+  # not reach the runner, or a stranger's disconnect reads as a seat vacating
+  # and the match is decided without it.
   def unsubscribed
     stop_all_streams
-    return if @player_id.nil?
+    player_id = @player_id
+    @player_id = nil
+    @seated = false
+    return if player_id.nil? || refused?
 
-    Starc::MatchRunner.for(@match_id)&.player_disconnected(@player_id)
+    Starc::MatchRunner.for(@match_id)&.player_disconnected(player_id)
+    nil
   end
 
   def identify(data)
@@ -69,17 +77,41 @@ class GameChannel < ApplicationCable::Channel
 
   # Binds this subscription to a player of the match. Anything else is not a
   # participant and has no business on the stream.
+  #
+  # Membership is decided before `@player_id` is set, never after: a refused
+  # subscriber that carries a player id takes that id with it when the
+  # connection drops, and `unsubscribed` would tell the runner a player of
+  # this match had left. `refuse!` additionally unsubscribes right here, so
+  # there is no window in which this channel holds game state at all.
   def enter(player)
-    return false if player.nil?
+    return false if player.nil? || refused?
 
-    @player_id = player.id
-    if @match.match_players.find_by(player_id: @player_id).nil?
-      terminate!("not_found", "you are not a player in match #{@match_id}")
+    unless @match.match_players.exists?(player_id: player.id)
+      refuse!("not_found", "you are not a player in match #{@match_id}")
       return false
     end
 
-    Starc::MatchRunner.for(@match_id)&.player_connected(@player_id)
-    send_game_start
+    # `enter` runs on subscription, on `identify` and again as a recovery in
+    # `require_player`. One subscription is one connection, so the runner is
+    # told about it exactly once — a second seat in the count would outlive
+    # the real connection and the match would never be decided.
+    return true if @seated && @player_id == player.id
+
+    @player_id = player.id
+    @seated = true
+    # The stream is the match's own broadcast: every snapshot, every command
+    # echo, every `game:ended`. It is joined only for a player of this match,
+    # so a refused or unidentified subscriber is not a silent spectator of
+    # somebody else's game.
+    stream_from Starc::LobbyRegistry.game_stream(@match_id)
+    # The runner has to exist before the connection is counted, not after: a
+    # match nobody has subscribed to yet is adopted right here, and a count
+    # handed to a runner that did not exist is a count nobody keeps — the next
+    # tab would be the first one the runner ever heard of, and closing it
+    # would read as the player leaving.
+    seated = send_game_start
+    Starc::MatchRunner.for(@match_id)&.player_connected(@player_id) if seated
+    seated
   end
 
   def require_player

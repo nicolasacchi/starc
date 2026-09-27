@@ -82,15 +82,25 @@ class Player < ApplicationRecord
     self
   end
 
+  # The increment is read inside the lock, never before it: `with_lock`
+  # reloads the row under the lock, so two results landing at once each see
+  # the other's write and both are counted. Computed before, both would write
+  # the same number and one match would vanish from the career record.
   def record_result!(result:, kills: 0, deaths: 0, resources_mined: 0, units_built: 0)
-    attrs = { kills: kills.to_i, deaths: deaths.to_i, resources_mined: resources_mined.to_i, units_built: units_built.to_i }
-    case result.to_s
-    when "win"  then attrs[:wins] = wins + 1
-    when "loss" then attrs[:losses] = losses + 1
-    when "draw" then attrs[:draws] = draws + 1
-    else raise ArgumentError, "unknown result #{result.inspect}"
+    outcome = case result.to_s
+              when "win", "loss", "draw" then result.to_s
+              else raise ArgumentError, "unknown result #{result.inspect}"
+              end
+
+    with_lock do
+      case outcome
+      when "win" then self.wins += 1
+      when "loss" then self.losses += 1
+      when "draw" then self.draws += 1
+      end
+      update!(kills: kills.to_i, deaths: deaths.to_i,
+              resources_mined: resources_mined.to_i, units_built: units_built.to_i)
     end
-    with_lock { update!(attrs) }
     self
   end
 

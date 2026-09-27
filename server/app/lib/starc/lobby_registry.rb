@@ -22,6 +22,13 @@ module Starc
     # `lobby:state` only advertises matches a client can still act on.
     LISTED_STATUSES = %w[lobby in_progress].freeze
 
+
+    # The browser never shows more than this. The listing is a full read of
+    # the `status` index, so without a cap one `lobby:state` grows with every
+    # match the server has ever hosted — and `lobby:create` has no rate limit,
+    # so the cost is attacker-inflatable.
+    LIST_LIMIT = 50
+
     # Chat history kept per match, so somebody joining a room sees what they
     # walked into.
     CHAT_BUFFER = 100
@@ -167,10 +174,6 @@ module Starc
       @mutex.synchronize { (@chat[match_id.to_i] || []).dup }
     end
 
-    def clear_chat(match_id)
-      @mutex.synchronize { @chat.delete(match_id.to_i) }
-    end
-
     private
 
     def envelope(fields)
@@ -198,15 +201,47 @@ module Starc
       seats.find { |seat| live.any? { |m| m.id == seat.match_id } }
     end
 
+    # One indexed, bounded query for the whole listing. The summary fields that
+    # used to be read one match at a time — a COUNT for the player count and
+    # two queries for the host's name — come out of the same eager-loaded rows,
+    # so a full lobby costs a fixed number of statements instead of three per
+    # match. `Match#to_summary_hash` cannot be reused here: it re-queries the
+    # associations it is handed, which is the N+1 this replaces.
     def fresh_summaries
       now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       cached = @mutex.synchronize { @cache }
       return cached[1] if cached && (now - cached[0]) < CACHE_TTL
 
-      listed = Match.all.select { |m| LISTED_STATUSES.include?(m.status) }
-                       .map(&:to_summary_hash)
+      listed = listed_matches.map { |match| summary_for(match) }
       @mutex.synchronize { @cache = [now, listed] }
       listed
+    end
+
+    def listed_matches
+      Match.where(status: LISTED_STATUSES)
+           .includes(match_players: :player)
+           .recent_first
+           .limit(LIST_LIMIT)
+           .to_a
+    end
+
+    # Mirrors `Match#to_summary_hash`;
+    # `spec/lib/starc/lobby_registry_spec.rb` pins the two together so the
+    # browser never sees a different shape from the one the REST lobby answers
+    # with.
+    def summary_for(match)
+      seats = match.match_players.sort_by(&:slot)
+      {
+        id: match.id,
+        name: match.name,
+        mode: match.mode,
+        map_id: match.map_id,
+        max_players: match.max_players,
+        player_count: seats.size,
+        status: match.status,
+        has_password: match.password_digest.present?,
+        host: seats.find(&:host?)&.player&.name.to_s
+      }
     end
 
     def apply_filters(listed, filters)

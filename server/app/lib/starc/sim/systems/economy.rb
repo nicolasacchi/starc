@@ -66,8 +66,12 @@ module Starc
 
         def self.to_node(world, e, dt)
           node = e.harvest_node_id ? world.node(e.harvest_node_id) : nil
-          if node.nil? || !node.amount.positive?
-            node = world.nearest_node(e.x, e.z, e.player_id)
+          # `node_still_works?` also covers distance, so a worker that was
+          # pulled to the far side of the map — an expansion, a new base —
+          # re-picks the field it is actually standing in rather than
+          # trudging back to the one it left.
+          unless world.node_still_works?(e, node)
+            node = world.nearest_node(e.x, e.z, e.player_id, e.id)
             if node.nil?
               # The map is mined out. There is nothing left to shuttle for.
               e.state = "idle"

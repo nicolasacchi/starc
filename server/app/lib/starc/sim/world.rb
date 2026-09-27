@@ -74,8 +74,21 @@ module Starc
       # so the per-node amount is a simulation constant, not a roster stat.
       RICH_NODE_AMOUNT = 1200.0
       NORMAL_NODE_AMOUNT = 700.0
-      # Re-pick a node once the cached one is further away than this.
+      # Re-pick a node once the one a worker is on is further away than this,
+      # which is what lets a worker sent to an expansion serve that field.
       NODE_REACQUIRE_DISTANCE_SQ = 64.0 * 64.0
+      # How many of one player's shuttles work a single node before the next
+      # one in the field is preferred. Two keeps a node's yield meaningful
+      # without leaving six of a rich cluster's eight nodes untouched.
+      NODE_WORKERS_PER_NODE = 2
+      # Nodes are map furniture, not a player's, so their placement is drawn
+      # from streams of their own — far above any seat id, so a node stream
+      # can never be mistaken for a player's command stream.
+      NODE_STREAM_BASE = 1_000_000
+      EXPANSION_STREAM_BASE = 2_000_000
+      # A satellite field at each expansion candidate, so taking an expansion
+      # is worth the walk.
+      EXPANSION_NODE_COUNT = 4
 
       # A mineral node. Deliberately not an entity: it is not a roster unit, it
       # has no combat, and it must never appear in a snapshot.
@@ -111,7 +124,6 @@ module Starc
         @projectiles = []
         @nodes = []
         @node_index = {}
-        @node_cache = {}
         @effects = []
         @events = []
         @pending_deaths = []
@@ -174,11 +186,32 @@ module Starc
       end
 
       # A player giving up: they lose and the match ends immediately.
+      #
+      # A player id that is not on this roster is not a forfeiter at all and
+      # changes nothing: the match cannot be decided on behalf of somebody who
+      # is not playing it, and the disconnected/forfeited pair is the only way
+      # this is reached from outside a seated client.
       def forfeit(player_id, reason = FORFEIT_REASON)
         return @finished if @finished
 
-        winner = @players.find { |p| p[:id] != player_id }&.fetch(:id)
-        @finished = { winner: winner, reason: reason, tick: @tick }
+        quitter = player(player_id)
+        return @finished if quitter.nil?
+
+        @finished = { winner: forfeit_opponent(quitter), reason: reason, tick: @tick }
+      end
+
+      # The win goes to a seat on a team other than the quitter's, so a team
+      # match is decided for a side that is still playing rather than for
+      # whoever happens to occupy the lowest slot.
+      def forfeit_opponent(quitter)
+        other_side = @players.find { |p| p[:team] != quitter[:team] }
+        return other_side[:id] if other_side
+
+        # Every seat on the quitter's team: the roster carries no team
+        # information to decide by, so the win falls to the first seat that is
+        # not the quitter's — the old rule, for the matches that have only one
+        # side in them.
+        @players.find { |p| p[:id] != quitter[:id] }&.fetch(:id)
       end
 
       # End the match outright (annihilation, timeout, stalemate).
@@ -339,32 +372,42 @@ module Starc
         }
       end
 
+      # `res` is the one field that is per *player* rather than per entity, so
+      # it is resolved once per snapshot into a small table and then stamped on
+      # each entity. There is deliberately no per-viewer variant of this
+      # method: `game:snapshot` is a single broadcast (PROTOCOL.md §5), so a
+      # field that depended on who was reading could never be carried, and
+      # `sel` — the other such field — is recomputed by the client, which does
+      # know its own seat and team.
       def snapshot_entities
         tick = @tick
+        balances = balance_table
         out = Array.new(@living.size)
         i = 0
         while i < @living.size
-          out[i] = @living[i].to_snapshot_hash(tick: tick)
+          e = @living[i]
+          out[i] = e.to_snapshot_hash(resources: balances[e.player_id], tick: tick)
           i += 1
         end
         out
       end
 
-      # Per-viewer snapshot. `sel` is advisory colour state — 0 none, 1 self,
-      # 2 ally, 3 enemy — and is the one field the broadcast leaves out.
-      def snapshot_for(player_id, server_ms: nil)
-        base = snapshot(server_ms: server_ms)
-        tick = @tick
-        base["entities"] = @living.map do |e|
-          e.to_snapshot_hash(selected_for: selection_for(e, player_id), tick: tick)
+      # What a player can spend right now: minerals and vespene together, as
+      # the integer PROTOCOL.md §5 documents. Building it per snapshot rather
+      # than per entity keeps the cost flat in the number of units.
+      def balance_table
+        out = {}
+        @players.each do |p|
+          st = @player_state[p[:id]]
+          out[p[:id]] = st ? (st[:minerals] + st[:vespene]).to_i : 0
         end
-        base
+        out
       end
 
-      def selection_for(entity, viewer_id)
-        return 0 if entity.player_id == viewer_id
-
-        allies?(entity.player_id, viewer_id) ? 2 : 3
+      # What one player can spend, in the same units as the wire's `res`.
+      def balance_for(player_id)
+        st = @player_state[player_id]
+        st ? (st[:minerals] + st[:vespene]).to_i : 0
       end
 
       # --- spawning ---------------------------------------------------------
@@ -566,31 +609,70 @@ module Starc
         n
       end
 
-      # Nearest node with minerals left. Cached per owner, so a shuttling
-      # worker does not rescan the node table every tick; the cache is
-      # dropped as soon as the node runs dry.
-      def nearest_node(x, z, owner_id = 0)
-        cached = @node_cache[owner_id]
-        if cached
-          n = cached
-          if n && n.amount.positive?
-            d = ((n.x - x) * (n.x - x)) + ((n.y - z) * (n.y - z))
-            return n if d <= NODE_REACQUIRE_DISTANCE_SQ
-          end
-        end
+      # Nearest node with minerals left, spread across a field rather than
+      # stacked on one spot: a node already worked by `NODE_WORKERS_PER_NODE`
+      # of this owner's shuttles is passed over in favour of the next
+      # nearest, so four SCVs occupy four nodes of the same cluster.
+      #
+      # `worker_id` is the caller, and is excluded from the tally: a worker
+      # that has just unloaded is re-picking, and must not be counted as the
+      # reason its own old node is busy. Ties break on node id, which keeps
+      # the choice a pure function of the match state.
+      #
+      # A worker only asks when it has no node — it has just deposited, the
+      # node it was on ran dry, or it has been pulled further than
+      # NODE_REACQUIRE_DISTANCE_SQ from it — so this scan runs a few times a
+      # second per worker rather than every tick.
+      def nearest_node(x, z, owner_id = 0, worker_id = nil)
+        claimed = node_claims(owner_id, worker_id)
         best = nil
         best_d = Float::INFINITY
+        fallback = nil
+        fallback_d = Float::INFINITY
         @nodes.each do |n|
           next unless n.amount.positive?
 
           d = ((n.x - x) * (n.x - x)) + ((n.y - z) * (n.y - z))
+          if d < fallback_d
+            fallback_d = d
+            fallback = n
+          end
+          next unless (claimed[n.id] || 0) < NODE_WORKERS_PER_NODE
           next if d >= best_d
 
           best_d = d
           best = n
         end
-        @node_cache[owner_id] = best
-        best
+        # Every remaining node is already being worked: fall back to the
+        # nearest rather than leaving the worker idle.
+        best || fallback
+      end
+
+      # Whether a worker should keep the node it is on, or look for another.
+      # A worker dragged across the map is not still serving the field it
+      # left, which is what makes an expansion's nodes reachable at all.
+      def node_still_works?(e, node)
+        return false if node.nil? || !node.amount.positive?
+
+        d = ((node.x - e.x) * (node.x - e.x)) + ((node.y - e.z) * (node.y - e.z))
+        d <= NODE_REACQUIRE_DISTANCE_SQ
+      end
+
+      # How many of `owner_id`'s live workers are already shuttling each node.
+      # One pass over the living set, so the answer costs the same whatever
+      # the map's node count.
+      def node_claims(owner_id, worker_id = nil)
+        counts = {}
+        @living.each do |w|
+          next unless w.alive? && w.worker? && w.player_id == owner_id
+          next if worker_id && w.id == worker_id
+
+          id = w.harvest_node_id
+          next unless id && id.positive?
+
+          counts[id] = (counts[id] || 0) + 1
+        end
+        counts
       end
 
       # --- resources --------------------------------------------------------
@@ -717,11 +799,11 @@ module Starc
       # The opening world. Every client reconstructs this from seed + map +
       # roster, so it is never transmitted (PROTOCOL.md §3).
       def setup_opening!
+        seed_mineral_fields
         @players.each do |p|
           start = @terrain.start_position(p[:slot])
           hq = spawn_entity(Starc::GameData.starting_building(p[:race]), p[:id], start["x"], start["z"])
           @player_state[p[:id]][:main_building_id] = hq&.id
-          seed_mineral_field(p[:id], start)
           place_starting_workers(p[:id], Starc::GameData.starting_unit(p[:race]), start)
         end
       end
@@ -747,33 +829,38 @@ module Starc
         end
       end
 
-      # The nearest declared cluster to the base becomes its starting field.
-      # Nodes ring out from the cluster centre so workers fan out instead of
-      # stacking on one spot.
-      def seed_mineral_field(player_id, start)
-        clusters = @terrain.mineral_clusters
-        return if clusters.empty?
-
-        best = nil
-        best_d = Float::INFINITY
-        clusters.each do |c|
-          d = ((c["x"] - start["x"])**2) + ((c["z"] - start["z"])**2)
-          next if d >= best_d
-
-          best_d = d
-          best = c
+      # Every declared cluster becomes real nodes, and so does a satellite
+      # field at every expansion candidate.
+      #
+      # These are map furniture, so they are seeded once from the world's own
+      # streams rather than per player: seeding "the nearest cluster to my
+      # base" per seat made a fourth of the map's declared clusters dead data
+      # and left an expansion candidate with nothing to mine when a player
+      # walked to it. Placement therefore depends only on the seed and the
+      # map, which is what keeps replays byte-identical.
+      def seed_mineral_fields
+        @terrain.mineral_clusters.each_with_index do |cluster, ci|
+          amount = cluster["rich"] ? RICH_NODE_AMOUNT : NORMAL_NODE_AMOUNT
+          count = (cluster["count"] || 1).to_i
+          ring_nodes(NODE_STREAM_BASE + (ci * 100), cluster["x"], cluster["z"],
+                     count, amount, !!cluster["rich"])
         end
-        return unless best
+        @terrain.expansion_candidates.each_with_index do |spot, si|
+          ring_nodes(EXPANSION_STREAM_BASE + (si * 100), spot["x"], spot["z"],
+                     EXPANSION_NODE_COUNT, NORMAL_NODE_AMOUNT, false)
+        end
+      end
 
-        amount = best["rich"] ? RICH_NODE_AMOUNT : NORMAL_NODE_AMOUNT
-        count = (best["count"] || 1).to_i
+      # `count` nodes inside NODE_RING_RADIUS of a centre, one RNG stream
+      # each so a cluster's layout does not shift when another cluster's
+      # count changes.
+      def ring_nodes(stream_base, cx, cz, count, amount, rich)
         count.times do |i|
-          rng = rng(player_id + 1000 + i)
-          angle = Math::PI * 2.0 * rng.next_float
-          radius = NODE_RING_RADIUS * rng.next_float
-          add_node(best["x"] + (Math.cos(angle) * radius),
-                   best["z"] + (Math.sin(angle) * radius),
-                   amount, rich: !!best["rich"])
+          r = rng(stream_base + i)
+          angle = Math::PI * 2.0 * r.next_float
+          radius = NODE_RING_RADIUS * r.next_float
+          add_node(cx + (Math.cos(angle) * radius), cz + (Math.sin(angle) * radius),
+                   amount, rich: rich)
         end
       end
     end

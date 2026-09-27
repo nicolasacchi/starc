@@ -456,22 +456,39 @@ describe("GameConnection", () => {
       expect(connection.snapshot?.entities.has(1)).toBe(false);
     });
 
-    it("moves a predicted unit before the server has seen the order", () => {
+    it("draws a predicted unit before the server has seen the order", () => {
       transport.emit(snapshotMessage(1, [entity(1, { x: 0 })]));
       connection.send([{ c: "move", ids: [1], x: 100, z: 0 }]);
       connection.tick(100);
 
-      const view = connection.sampleWorld().entities.get(1);
-      // Without prediction the unit does not move until the next snapshot.
-      expect(view?.x).toBeGreaterThan(0);
-      expect(view?.st).toBe("moving");
+      // The table the renderer is handed, not an internal one: without
+      // prediction folded in, the unit stands still until the server answers.
+      const table = connection.predictedEntities([entity(1, { x: 0 })]);
+      expect(table[0].x).toBeGreaterThan(0);
+      expect(table[0].st).toBe("moving");
+      // The snapshot itself is never mutated: the server's answer has to stay
+      // available for reconciliation.
+      expect(entity(1, { x: 0 }).x).toBe(0);
+    });
+
+    it("leaves a unit alone once the server has answered for it", () => {
+      transport.emit(snapshotMessage(1, [entity(1, { x: 0 })]));
+      connection.send([{ c: "move", ids: [1], x: 100, z: 0 }]);
+      connection.tick(100);
+
+      // The server's own echo retires the local order; predicting on top of
+      // it would make own units run ahead of the position everyone else sees.
+      const echo = [entity(1, { x: 0.5, ord: 1, ox: 100, oz: 0 })];
+      transport.emit(snapshotMessage(2, echo));
+      expect(connection.predictedEntities(echo)[0].x).toBe(0.5);
     });
 
     it("resynchronises after a reconnect so no pre-drop entity survives", async () => {
       transport.emit(snapshotMessage(1, [entity(1, { x: 0 }), entity(2, { x: 5 })]));
       connection.send([{ c: "move", ids: [1], x: 100, z: 0 }]);
       connection.tick(100);
-      expect(connection.sampleWorld().entities.size).toBe(2);
+      const live = [...connection.snapshot!.entities.values()];
+      expect(connection.predictedEntities(live)).toHaveLength(2);
 
       transport.setState("reconnecting");
       expect(connection.state).toBe("reconnecting");
@@ -481,7 +498,12 @@ describe("GameConnection", () => {
       // Everything we held describes a match that moved on without us; drawing
       // it is a ghost base the player cannot click.
       expect(connection.snapshots.size).toBe(0);
-      expect(connection.sampleWorld().entities.size).toBe(0);
+      expect(connection.snapshot).toBeNull();
+      // The pre-drop unit is not still predicted as walking: with the
+      // predictor reset, the table comes back exactly as it went in.
+      const stale = connection.predictedEntities([entity(1, { x: 0 })]);
+      expect(stale[0].x).toBe(0);
+      expect(stale[0].st).toBe("idle");
     });
 
     it("re-subscribes to the match after a reconnect", async () => {

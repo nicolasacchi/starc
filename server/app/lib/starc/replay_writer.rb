@@ -10,10 +10,23 @@ module Starc
   # was applied on plus its index in the batch it arrived in — the two pieces of
   # information the format carries alongside the command itself.
   class ReplayWriter
+    # A match is bounded in time, not in input: `game:command` has no rate
+    # limit, so a client can push commands for as long as the match runs and
+    # each accepted one is kept here until `finalize!` serialises the whole
+    # list into one `text` column. The 256 the runner enforces bounds a batch,
+    # not a match.
+    #
+    # When the cap is hit the recording stops and says so — the replay header
+    # carries `truncated: true` and the command count that was kept. A replay
+    # that silently dropped the tail of a real match would read as a complete
+    # one and silently fail to reproduce `final_state`.
+    MAX_COMMANDS = 20_000
+
     def initialize(match)
       @match = match
       @mutex = Mutex.new
       @commands = []
+      @truncated = false
     end
 
     attr_reader :match
@@ -23,14 +36,33 @@ module Starc
     # `player_id` in its command would otherwise overwrite the recorded stamp
     # and could attribute the command to another player or another tick, which
     # breaks the determinism guarantee of PROTOCOL.md §8.
+    #
+    # Returns the recorded entry, or nil once `MAX_COMMANDS` have been kept.
+    # A command past the cap is still applied by the world — dropping it here
+    # changes nothing about the match, only about what the replay can show,
+    # and the header says so.
     def record(tick:, player_id:, index:, command:)
       entry = {}
       command.each { |key, value| entry[key.to_s] = value }
       entry["tick"] = tick.to_i
       entry["player_id"] = player_id.to_i
       entry["index"] = index.to_i
-      @mutex.synchronize { @commands << entry }
+      @mutex.synchronize do
+        if @commands.size >= MAX_COMMANDS
+          @truncated = true
+          next nil
+        end
+
+        @commands << entry
+      end
       entry
+    end
+
+    # True once a command was refused because the match hit the cap. It is
+    # written into the replay header so a reader can tell a complete replay
+    # from a bounded one instead of assuming the commands are the whole match.
+    def truncated?
+      @mutex.synchronize { @truncated }
     end
 
     # A deep-enough copy: the entries themselves have to be copies, or a caller
@@ -71,8 +103,16 @@ module Starc
       Rails.logger.warn("[starc] match #{@match.id} reload failed: #{e.class}: #{e.message}")
     end
 
+    # A truncated recording is labelled rather than passed off as the whole
+    # match: `command_count` is what was kept and `truncated` says the command
+    # stream stops there.
     def header_for(winner:, duration_ms:)
-      @match.replay_header.merge(winner: winner, duration_ms: duration_ms.to_i)
+      @match.replay_header.merge(
+        winner: winner,
+        duration_ms: duration_ms.to_i,
+        command_count: command_count,
+        truncated: truncated?
+      )
     end
   end
 end

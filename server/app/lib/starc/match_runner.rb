@@ -69,8 +69,19 @@ module Starc
       # The runner for a match, starting one if the match is live and this
       # process has not simulated it yet. Returns nil when the match is not
       # running or the world could not be built.
+      #
+      # A registered runner is only handed back when it is still stepping the
+      # very row `match` names. A match id is never reused in production, but
+      # a runner left behind — by a reload that dropped the registry out from
+      # under it, or by a rolled-back test transaction that let the id be
+      # issued again — would otherwise answer every later question about the
+      # new match out of the old one's world.
       def adopt(match)
-        self.for(match.id) || (match.in_progress? ? start!(match) : nil)
+        runner = self.for(match.id)
+        return runner if runner&.simulating?(match)
+
+        forget(match.id) if runner
+        match.in_progress? ? start!(match) : nil
       end
 
       def start!(match)
@@ -96,9 +107,12 @@ module Starc
       @match = match
       @match_id = match.id.to_i
       # Reentrant: the tick thread reads the forfeit deadlines while it already
-      # holds the world lock.
       @mutex = Monitor.new
       @acks = {}
+      # player id => how many of that player's connections are on this match
+      # right now. A player with two tabs open is present until the last of
+      # them goes.
+      @connections = Hash.new(0)
       @disconnect_at = {}
       @pending_events = []
       @stopping = false
@@ -183,27 +197,69 @@ module Starc
       !end_result.nil?
     end
 
+    # A connection joined the match. One subscription is one connection, so
+    # this is a count and not a flag: a second tab, or a reconnect that races
+    # the socket the server has not noticed yet, both hold a seat, and the
+    # forfeit countdown only starts once the last of them is gone.
+    #
+    # A player who is not on this roster is not a connection of it — counting
+    # one would arm a countdown that later hands the match to a bystander.
     def player_connected(player_id)
-      @mutex.synchronize { @disconnect_at.delete(player_id) }
+      @mutex.synchronize do
+        next nil unless roster_player?(player_id)
+
+        @connections[player_id] += 1
+        @disconnect_at.delete(player_id)
+      end
       nil
     end
 
-    # A dropped player has FORFEIT_GRACE_MS to come back; the countdown is
-    # checked by the tick loop, so no timer thread is needed per player.
+    # A connection went away. The player has `FORFEIT_GRACE_MS` to come back
+    # before the match is decided without them (PROTOCOL.md §5, reason
+    # `disconnect`); the countdown is checked by the tick loop, so no timer
+    # thread is needed per player.
     def player_disconnected(player_id)
       @mutex.synchronize do
-        # A second tab closing must not restart the countdown of a player who
-        # is still connected elsewhere.
-        return nil if @disconnect_at.key?(player_id)
+        next nil unless roster_player?(player_id)
+
+        # Closing one of a player's tabs is not the player leaving: only the
+        # last connection arms the countdown, and a player who was never
+        # connected to this match cannot arm it at all.
+        @connections[player_id] -= 1
+        next nil unless @connections[player_id] <= 0
+
+        @connections.delete(player_id)
+        next nil if @disconnect_at.key?(player_id)
 
         @disconnect_at[player_id] = monotonic + (FORFEIT_GRACE_MS / 1000.0)
         @pending_events << alert_event(
           "#{player_name(player_id)} disconnected — the match ends in #{FORFEIT_GRACE_MS / 1000} s unless they return"
         )
       end
+      nil
     end
 
+    # How many of this player's connections are on the match right now.
+    def connections_for(player_id)
+      @mutex.synchronize { @connections[player_id.to_i] }
+    end
+
+    # True while this runner is still stepping the row `match` names: the same
+    # id, still running, and the same match rather than one that has since been
+    # issued the id again. The question is asked of the database rather than of
+    # `@match`, which the tick thread owns.
+    def simulating?(match)
+      @match_id == match.id.to_i &&
+        Match.where(id: @match_id, status: Match.statuses.fetch("in_progress"))
+             .where(created_at: @match.created_at).exists?
+    end
+
+    # A client asking to give up is only believed if it is playing: the world
+    # refuses a forfeiter who is not on the roster, and refusing here as well
+    # keeps the "forfeited" alert off the stream for a stranger.
     def player_forfeits(player_id)
+      return nil unless @mutex.synchronize { roster_player?(player_id) }
+
       push_alert("#{player_name(player_id)} forfeited")
       @mutex.synchronize { @world&.forfeit(player_id, "forfeit") }
       nil
@@ -292,14 +348,17 @@ module Starc
 
       entries = []
       rejected = []
-      overflow = false
 
       commands.each_with_index do |command, index|
-        if !overflow && (index >= MAX_COMMANDS_PER_BATCH || rejected.size >= MAX_COMMANDS_PER_BATCH)
+        # Past the cap nothing reaches the simulation — and *every* command
+        # past the cap is reported, each under its own index, because
+        # PROTOCOL.md §4 matches rejections by command index. Announcing only
+        # the first casualty leaves a client that sent 300 commands with 43
+        # silent drops and no way to learn which ones.
+        if index >= MAX_COMMANDS_PER_BATCH
           rejected << rejection(index, "invalid_payload", "batch limited to #{MAX_COMMANDS_PER_BATCH} commands")
-          overflow = true
+          next
         end
-        next if overflow
 
         problem = command_problem(command)
         if problem
@@ -383,6 +442,9 @@ module Starc
       @mutex.synchronize { @world&.finished? }
     end
 
+    # Every countdown that has run out is retired, and each is put to the
+    # world — the first forfeit ends the match, so the loop stops there rather
+    # than reporting one player for a decision the world has already made.
     def expire_forfeits
       return if @disconnect_at.empty?
 
@@ -390,8 +452,11 @@ module Starc
       expired = @disconnect_at.select { |_player_id, deadline| deadline <= now }.keys
       return if expired.empty?
 
-      expired.each { |player_id| @disconnect_at.delete(player_id) }
-      @world.forfeit(expired.first, "disconnect")
+      expired.each do |player_id|
+        @disconnect_at.delete(player_id)
+        @world.forfeit(player_id, "disconnect")
+        break if @world.finished?
+      end
     end
 
     # `finalize!` is idempotent: the replay row is unique per match and the
@@ -402,10 +467,13 @@ module Starc
       return nil unless claim_finalize
 
       result = end_result
-      # The replay is written before anyone is told the match ended, so the
-      # `replay_url` in `game:ended` already resolves.
-      persist(result)
-      broadcast(ended_payload(result)) if result
+      if result.nil?
+        persist(nil)
+      elsif persist(result)
+        # The replay is written before anyone is told the match ended, so the
+        # `replay_url` in `game:ended` already resolves.
+        broadcast(ended_payload(result))
+      end
       forget
     rescue StandardError => e
       log_error("finalize", e)
@@ -423,11 +491,23 @@ module Starc
       end
     end
 
+    # The end-of-match writes, once per match row. Returns true when this call
+    # is the one that ended the match.
+    #
+    # A dev reload (`config.enable_reloading = true`) unloads this class, which
+    # resets the registry and lets the next subscriber's `adopt` build a
+    # *second* runner for a match that is already being simulated. Both of them
+    # finalise, so the match row is where that race is settled: a runner that
+    # finds the match already finished or abandoned writes nothing, and tells
+    # nobody, so `apply_results` cannot move career counters twice.
     def persist(result)
+      @match.reload
+      return false if @match.finished? || @match.abandoned?
+
       states = player_states
       if result.nil?
         abandon_match
-        return
+        return false
       end
 
       winner = normalize_winner(value_of(result, "winner"))
@@ -437,10 +517,17 @@ module Starc
       @match.reload
       @match.finish!(winner_player_id: winner, reason: reason, duration_ms: run)
       write_replay(winner: winner, duration_ms: run)
+      true
     rescue StandardError => e
       log_error("persist", e)
+      false
     end
 
+    # One seat is written exactly once. The guard is the write itself rather
+    # than a check in Ruby: `pending` is where every seat starts, so a
+    # conditional update settles the race between two finalising runners in the
+    # database, and `record_result!` — which is not idempotent — only runs for
+    # the runner that actually moved the seat.
     def apply_results(winner, states)
       @match.players_ordered.each do |seat|
         state = state_for(states, seat.player_id)
@@ -451,12 +538,21 @@ module Starc
           resources_mined: stat(state, "resources_mined"),
           units_built: stat(state, "units_built")
         }
-        seat.update!(stats.merge(result: result, army_value: stat(state, "army_value")))
+        next unless claim_seat(seat, stats, result, stat(state, "army_value"))
+
         # `Player` keeps no army_value, so the career totals take the rest.
         seat.player&.record_result!(result: result, **stats)
+        LeaderboardEntry.record_seat_result!(seat.reload)
       rescue StandardError => e
         log_error("result for player #{seat.player_id}", e)
       end
+    end
+
+    def claim_seat(seat, stats, result, army_value)
+      seat.class
+          .where(id: seat.id, result: "pending")
+          .update_all(stats.merge(result: result, army_value: army_value, updated_at: Time.current))
+          .positive?
     end
 
     def write_replay(winner:, duration_ms:)
@@ -591,6 +687,13 @@ module Starc
       roster.find { |player| player[:id] == player_id }&.fetch(:name) || "player #{player_id}"
     end
 
+    # The roster is fixed for the life of a match, so this is the one question
+    # every externally supplied player id has to pass before it is allowed to
+    # change anything: is this person actually in the match?
+    def roster_player?(player_id)
+      roster.any? { |player| player[:id] == player_id.to_i }
+    end
+
     def stopping?
       @mutex.synchronize { @stopping }
     end
@@ -661,5 +764,22 @@ module Starc
     def log_error(scope, error)
       Rails.logger.error("[starc] match #{@match_id} #{scope} failed: #{error.class}: #{error.message}")
     end
+  end
+
+  # --- process lifecycle ----------------------------------------------------
+  #
+  # A `MatchRunner` owns a thread that has to be joined, and nothing in the
+  # request path ever asks: with `config.enable_reloading = true` a code
+  # reload unloads this file, which drops the registry and orphans every live
+  # tick thread, and a Puma shutdown ends the process with those threads still
+  # stepping. Both hooks are registered once per process — `before_class_unload`
+  # and `at_exit` are attached to objects that are themselves never reloaded,
+  # so re-entering this file must not stack another copy of either.
+  unless Rails.application.instance_variable_get(:@starc_match_runner_shutdown_hooked)
+    Rails.application.instance_variable_set(:@starc_match_runner_shutdown_hooked, true)
+
+    # Runs while the old class is still the live one, before its constants go.
+    ActiveSupport::Reloader.before_class_unload { MatchRunner.stop_all! }
+    at_exit { MatchRunner.stop_all! }
   end
 end

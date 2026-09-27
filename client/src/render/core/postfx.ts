@@ -1,15 +1,27 @@
 /**
  * Post-processing chain.
  *
- * Order: SSAO → render → bloom → god rays → composite → SMAA. The god rays and
- * the grade (chromatic aberration + vignette + grain + sharpen) are two custom
- * `ShaderPass`es written for this game; the grade deliberately fuses four
- * effects into one fragment shader because four full-screen passes cost four
- * bandwidth-bound round trips for what is a few dozen ALU ops.
+ * Order: SSAO → render → bloom → composite → SMAA, where the composite pass is
+ * a single fragment shader that fuses god rays with the grade (chromatic
+ * aberration + vignette + grain + sharpen).
+ *
+ * God rays used to be their own `ShaderPass` with `AdditiveBlending`, on the
+ * assumption that the pass would "add to whatever is already in the buffer".
+ * In an `EffectComposer` chain that is not possible from a position after the
+ * beauty stage: `RenderPass`, `SSAOPass` and `UnrealBloomPass` all set
+ * `needsSwap = false` and composite into `readBuffer`, so `readBuffer` holds the
+ * scene while `writeBuffer` is still the untouched target. A `ShaderPass`
+ * inherits `needsSwap = true` and renders into `writeBuffer`, which
+ * `EffectComposer` never protects from `renderer.autoClear`. The pass therefore
+ * cleared the scene away, output only its own shafts, and every preset except
+ * `low` displayed a smear of light instead of the world. Adding an *additive
+ * term* to the base image has to happen inside a pass that reads the base image,
+ * so the shafts are computed by the composite shader from the same
+ * `tDiffuse` it grades and added to the result there.
  *
  * Everything is optional and driven by `QualitySettings`; with `postFx` off the
- * pipeline is a pass-through that calls `renderer.render` directly, which is the
- * only sane path on the low preset.
+ * pipeline is a pass-through that calls `renderer.render` directly, which is
+ * the only sane path on the low preset.
  */
 import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -35,21 +47,78 @@ function release(pass: object | null): void {
   (pass as { dispose?: () => void } | null)?.dispose?.();
 }
 
+/**
+ * God rays: radial blur from the sun's projected position, with a depth-aware
+ * occlusion term so a building in front of the sun actually cuts the shafts
+ * instead of smearing through it. Dithered start offsets kill the banding that
+ * a 24-tap blur otherwise produces.
+ *
+ * Returns the scattered light only; `base + shafts` is the composite's job.
+ */
+export const godRaysChunk = /* glsl */ `
+  float interleavedGradientNoise(vec2 p) {
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+  }
+
+  vec3 godRays(vec2 vUv, vec3 base) {
+    // Aspect-corrected delta keeps the shafts circular on a wide viewport.
+    vec2 delta = (vUv - uSunPosition) * (uDensity / float(uSamples));
+    delta.x *= uAspect;
+    vec2 uv = vUv;
+
+    // Per-pixel start offset: turns the banding of a 24-tap blur into fine
+    // noise, which the grade's grain then absorbs.
+    float jitter = interleavedGradientNoise(gl_FragCoord.xy + fract(uTime) * 37.0);
+
+    float surfaceDepth = linearDepth(texture(tDepth, vUv).x);
+    float illumination = 1.0;
+    float weight = 1.0;
+    vec3 shafts = vec3(0.0);
+
+    for (int i = 0; i < MAX_SAMPLES; i++) {
+      if (i >= uSamples) break;
+      uv -= delta * jitter;
+      vec3 sampled = texture(tDiffuse, uv).rgb;
+      float sampleDepth = linearDepth(texture(tDepth, uv).x);
+      float brightness = dot(sampled, vec3(0.2126, 0.7152, 0.0722));
+
+      // Depth mode: a sample contributes only if it is behind the surface
+      // being shaded and in front of the sun, so a tower really does cast a
+      // shadow through the shafts. Luminance mode (medium preset, no depth
+      // target) approximates the same thing by scattering only bright pixels,
+      // which is the classic screen-space god ray and costs nothing extra.
+      float depthGate = step(surfaceDepth - 0.05, sampleDepth) * step(sampleDepth, uSunDepth);
+      float lumaGate = smoothstep(0.65, 1.0, brightness);
+      float gate = mix(lumaGate, depthGate, uUseDepth);
+      shafts += sampled * illumination * gate * weight;
+      illumination *= uDecay;
+    }
+
+    shafts *= (uExposure / float(uSamples)) * uWeight * 2.0;
+
+    // Fade out as the sun leaves the frame so the shafts never pop.
+    vec2 offscreen = max(abs(uSunPosition - 0.5) - 0.5, 0.0);
+    float onScreen = uSunVisible * (1.0 - smoothstep(0.0, 0.5, length(offscreen * vec2(uAspect, 1.0))));
+    return base + shafts * onScreen;
+  }
+`;
+
 /* ------------------------------------------------------------------ */
-/* God rays — radial blur toward the sun, masked by occlusion           */
+/* Composite — god rays + CA + vignette + grain + sharpen, in one pass  */
 /* ------------------------------------------------------------------ */
 
-/**
- * Screen-space radial blur from the sun's projected position, with a
- * depth-aware occlusion term so a building in front of the sun actually cuts
- * the shafts instead of smearing through it. Dithered start offsets kill the
- * banding that a 24-tap blur otherwise produces.
- */
-export const GodRaysShader = {
-  name: "GodRaysShader",
+export const CompositeShader = {
+  name: "CompositeShader",
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
     tDepth: { value: null as THREE.Texture | null },
+    uResolution: { value: new THREE.Vector2(1280, 720) },
+    uAberration: { value: 0.0016 },
+    uVignette: { value: 0.32 },
+    uGrain: { value: 0.035 },
+    uSharpen: { value: 0.22 },
+    uSaturation: { value: 1.06 },
+    uTime: { value: 0 },
     uSunPosition: { value: new THREE.Vector2(0.5, 0.5) },
     uSunVisible: { value: 1 },
     uDensity: { value: 0.92 },
@@ -59,11 +128,12 @@ export const GodRaysShader = {
     uSamples: { value: 24 },
     uSunDepth: { value: 1e6 },
     uUseDepth: { value: 1 },
-    uTime: { value: 0 },
     uAspect: { value: 1.777 },
+    uCameraNear: { value: 0.1 },
+    uCameraFar: { value: 2000 },
   },
-  // Both passes are authored as GLSL ES 3.00 and the materials are tagged
-  // `glslVersion: GLSL3` at build time, so WebGL2 compiles them natively.
+  // Authored as GLSL ES 3.00 and the material is tagged `glslVersion: GLSL3`
+  // at build time, so WebGL2 compiles it natively.
   vertexShader: /* glsl */ `
     out vec2 vUv;
     void main() {
@@ -81,6 +151,13 @@ export const GodRaysShader = {
 
     uniform sampler2D tDiffuse;
     uniform sampler2D tDepth;
+    uniform vec2 uResolution;
+    uniform float uAberration;
+    uniform float uVignette;
+    uniform float uGrain;
+    uniform float uSharpen;
+    uniform float uSaturation;
+    uniform float uTime;
     uniform vec2 uSunPosition;
     uniform float uSunVisible;
     uniform float uDensity;
@@ -88,12 +165,11 @@ export const GodRaysShader = {
     uniform float uWeight;
     uniform float uExposure;
     uniform int uSamples;
-    uniform float uCameraNear;
-    uniform float uCameraFar;
     uniform float uSunDepth;
     uniform float uUseDepth;
-    uniform float uTime;
     uniform float uAspect;
+    uniform float uCameraNear;
+    uniform float uCameraFar;
 
     const int MAX_SAMPLES = 32;
 
@@ -102,88 +178,7 @@ export const GodRaysShader = {
       return (2.0 * uCameraNear * uCameraFar) / (uCameraFar + uCameraNear - z * (uCameraFar - uCameraNear));
     }
 
-    float interleavedGradientNoise(vec2 p) {
-      return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
-    }
-
-    void main() {
-      // Aspect-corrected delta keeps the shafts circular on a wide viewport.
-      vec2 delta = (vUv - uSunPosition) * (uDensity / float(uSamples));
-      delta.x *= uAspect;
-      vec2 uv = vUv;
-
-      // Per-pixel start offset: turns the banding of a 24-tap blur into fine
-      // noise, which the grade's grain then absorbs.
-      float jitter = interleavedGradientNoise(gl_FragCoord.xy + fract(uTime) * 37.0);
-
-      float surfaceDepth = linearDepth(texture(tDepth, vUv).x);
-      float illumination = 1.0;
-      float weight = 1.0;
-      vec3 shafts = vec3(0.0);
-
-      for (int i = 0; i < MAX_SAMPLES; i++) {
-        if (i >= uSamples) break;
-        uv -= delta * jitter;
-        vec3 sampled = texture(tDiffuse, uv).rgb;
-        float sampleDepth = linearDepth(texture(tDepth, uv).x);
-        float brightness = dot(sampled, vec3(0.2126, 0.7152, 0.0722));
-
-        // Depth mode: a sample contributes only if it is behind the surface
-        // being shaded and in front of the sun, so a tower really does cast a
-        // shadow through the shafts. Luminance mode (medium preset, no depth
-        // target) approximates the same thing by scattering only bright pixels,
-        // which is the classic screen-space god ray and costs nothing extra.
-        float depthGate = step(surfaceDepth - 0.05, sampleDepth) * step(sampleDepth, uSunDepth);
-        float lumaGate = smoothstep(0.65, 1.0, brightness);
-        float gate = mix(lumaGate, depthGate, uUseDepth);
-        shafts += sampled * illumination * gate * weight;
-        illumination *= uDecay;
-      }
-
-      shafts *= (uExposure / float(uSamples)) * uWeight * 2.0;
-
-      // Fade out as the sun leaves the frame so the shafts never pop.
-      vec2 offscreen = max(abs(uSunPosition - 0.5) - 0.5, 0.0);
-      float onScreen = uSunVisible * (1.0 - smoothstep(0.0, 0.5, length(offscreen * vec2(uAspect, 1.0))));
-
-      fragColor = vec4(shafts * onScreen, 1.0);
-    }
-  `,
-};
-
-/* ------------------------------------------------------------------ */
-/* Composite grade — CA + vignette + grain + sharpen, in one pass       */
-/* ------------------------------------------------------------------ */
-
-export const CompositeShader = {
-  name: "CompositeShader",
-  uniforms: {
-    tDiffuse: { value: null as THREE.Texture | null },
-    uResolution: { value: new THREE.Vector2(1280, 720) },
-    uAberration: { value: 0.0016 },
-    uVignette: { value: 0.32 },
-    uGrain: { value: 0.035 },
-    uSharpen: { value: 0.22 },
-    uSaturation: { value: 1.06 },
-    uTime: { value: 0 },
-  },
-  vertexShader: GodRaysShader.vertexShader,
-  fragmentShader: /* glsl */ `
-    precision highp float;
-    precision highp int;
-
-    layout(location = 0) out vec4 fragColor;
-
-    in vec2 vUv;
-
-    uniform sampler2D tDiffuse;
-    uniform vec2 uResolution;
-    uniform float uAberration;
-    uniform float uVignette;
-    uniform float uGrain;
-    uniform float uSharpen;
-    uniform float uSaturation;
-    uniform float uTime;
+${godRaysChunk}
 
     float hash12(vec2 p) {
       vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -203,6 +198,10 @@ export const CompositeShader = {
       color.r = texture(tDiffuse, vUv + shift).r;
       color.g = texture(tDiffuse, vUv).g;
       color.b = texture(tDiffuse, vUv - shift).b;
+
+      // The shafts are added to the very texel the grade just read, so the
+      // world survives the chain and the light rides on top of it.
+      color = godRays(vUv, color);
 
       // Unsharp mask on luminance only: chroma noise is far more visible.
       vec3 blur = (
@@ -240,7 +239,6 @@ export class PostFXPipeline {
   private composer: EffectComposer | null = null;
   private ssao: SSAOPass | null = null;
   private bloom: UnrealBloomPass | null = null;
-  private godRays: ShaderPass | null = null;
   private composite: ShaderPass | null = null;
   private smaa: SMAAPass | null = null;
   private output: OutputPass | null = null;
@@ -274,17 +272,19 @@ export class PostFXPipeline {
     this.composer.setPixelRatio(renderer.getPixelRatio());
     this.composer.setSize(width, height);
 
-    // SSAOPass renders the beauty buffer itself, so a RenderPass behind it
-    // would throw that work away and pay for it twice. With SSAO on it takes
-    // the first slot; without it the plain RenderPass does.
+    // SSAOPass does not render the beauty image: it renders normals, computes
+    // and blurs the AO, and multiplies that into whatever the read buffer
+    // already holds (CustomBlending, dst*src). With no RenderPass in front of
+    // it, `high` and `ultra` had nothing to multiply into and the world never
+    // reached the screen at all. The beauty render always comes first.
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+
     if (this.settings.ssao) {
       this.ssao = new SSAOPass(this.scene, this.camera, width, height);
       this.ssao.kernelRadius = 12;
       this.ssao.minDistance = 0.002;
       this.ssao.maxDistance = 0.12;
       this.composer.addPass(this.ssao);
-    } else {
-      this.composer.addPass(new RenderPass(this.scene, this.camera));
     }
 
     if (this.settings.bloom) {
@@ -312,21 +312,16 @@ export class PostFXPipeline {
       THREE.UnsignedIntType,
     );
 
-    this.godRays = new ShaderPass(GodRaysShader);
-    this.godRays.uniforms.uAspect.value = width / height;
-    this.godRays.uniforms.uUseDepth.value = this.depthOcclusion ? 1 : 0;
-    this.godRays.uniforms.tDepth.value = this.depthTarget.depthTexture;
-    // The pass only produces light: it adds to whatever is already in the
-    // buffer instead of replacing it.
-    this.godRays.material.glslVersion = THREE.GLSL3;
-    this.godRays.material.blending = THREE.AdditiveBlending;
-    this.godRays.material.transparent = true;
-    this.composer.addPass(this.godRays);
-
+    // One pass carries the shafts *and* the grade: both read the same beauty
+    // buffer, so the additive term can never be composited on its own.
     this.composite = new ShaderPass(CompositeShader);
     this.composite.uniforms.uResolution.value.set(width, height);
+    this.composite.uniforms.uAspect.value = width / height;
+    this.composite.uniforms.uUseDepth.value = this.depthOcclusion ? 1 : 0;
+    this.composite.uniforms.tDepth.value = this.depthTarget.depthTexture;
     this.composite.material.glslVersion = THREE.GLSL3;
     this.composer.addPass(this.composite);
+
 
     this.output = new OutputPass();
     this.composer.addPass(this.output);
@@ -346,19 +341,21 @@ export class PostFXPipeline {
     if (this.depthOcclusion) this.depthTarget?.setSize(width, height);
     this.ssao?.setSize(width, height);
     this.bloom?.setSize(width, height);
-    if (this.composite) this.composite.uniforms.uResolution.value.set(width, height);
-    if (this.godRays) this.godRays.uniforms.uAspect.value = width / height;
+    if (this.composite) {
+      this.composite.uniforms.uResolution.value.set(width, height);
+      this.composite.uniforms.uAspect.value = width / height;
+    }
   }
 
 
   /**
-   * Feeds the god-ray pass the sun's screen position for this frame. `depth` is
-   * the sun's view-space distance; an infinitely distant sun stays at the far
-   * plane, which is what the shader wants for "nothing occludes it".
+   * Feeds the composite pass the sun's screen position for this frame. `depth`
+   * is the sun's view-space distance; an infinitely distant sun stays at the
+   * far plane, which is what the shader wants for "nothing occludes it".
    */
   setSunScreenPosition(x: number, y: number, visible: boolean, depth = Number.POSITIVE_INFINITY): void {
-    if (!this.godRays) return;
-    const uniforms = this.godRays.uniforms;
+    if (!this.composite) return;
+    const uniforms = this.composite.uniforms;
     (uniforms.uSunPosition.value as THREE.Vector2).set(x, y);
     uniforms.uSunVisible.value = visible ? 1 : 0;
     uniforms.uSunDepth.value = Number.isFinite(depth) ? depth : 1e6;
@@ -374,7 +371,7 @@ export class PostFXPipeline {
    * doubles as a position offset.
    */
   setSunDirection(sunDirection: THREE.Vector3): void {
-    if (!this.godRays) return;
+    if (!this.composite) return;
     this.scratchForward.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
     this.scratchForward.negate();
     this.scratchProjected.copy(sunDirection).normalize();
@@ -393,8 +390,8 @@ export class PostFXPipeline {
     }
     this.elapsed += THREE.MathUtils.clamp(deltaSeconds, 0, 0.1);
 
-    if (this.godRays) {
-      // The composer's targets do not expose depth, so the god-ray pass gets
+    if (this.composite) {
+      // The composer's targets do not expose depth, so the occlusion term gets
       // its own depth-only geometry pass. Skipped on the medium preset, which
       // falls back to the shader's luminance occlusion.
       if (this.depthOcclusion) {
@@ -403,9 +400,8 @@ export class PostFXPipeline {
         this.renderer.render(this.scene, this.camera);
         this.renderer.setRenderTarget(null);
       }
-      this.godRays.uniforms.uTime.value = this.elapsed;
+      this.composite.uniforms.uTime.value = this.elapsed;
     }
-    if (this.composite) this.composite.uniforms.uTime.value = this.elapsed;
     composer.render(this.elapsed);
   }
 
@@ -415,7 +411,6 @@ export class PostFXPipeline {
     // cast that would break the day the runtime changes.
     release(this.ssao);
     release(this.bloom);
-    release(this.godRays);
     release(this.composite);
     release(this.smaa);
     release(this.output);
@@ -430,7 +425,6 @@ export class PostFXPipeline {
 
     this.ssao = null;
     this.bloom = null;
-    this.godRays = null;
     this.composite = null;
     this.smaa = null;
     this.output = null;

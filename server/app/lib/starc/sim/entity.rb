@@ -299,9 +299,21 @@ module Starc
       # omitted so frames stay small; `z` is the authoritative terrain height
       # and is never recomputed client-side.
       #
-      # `selected_for` is the advisory colour state: 0 none, 1 self, 2 ally,
-      # 3 enemy. The broadcast snapshot omits it (0).
-      def to_snapshot_hash(selected_for: 0, tick: nil)
+      # `resources` is the *owning player's* spendable balance — minerals and
+      # vespene together, as PROTOCOL.md §5 documents — passed in by `World`
+      # because only the world holds a player's account.
+      #
+      # It is emitted on every entity rather than on workers alone: a player
+      # with no workers left still has a balance, and a client reads its own
+      # player's figure off its own entities, so a restriction to workers
+      # would silently freeze the HUD the moment a base is lost.
+      #
+      # The cost is a real information leak: one broadcast carries every
+      # player's balance to every client, so an opponent's exact mineral
+      # count is readable. Hiding it needs a per-client stream or a second
+      # channel, which this transport does not have; until it does, this is a
+      # deliberate trade, not an oversight.
+      def to_snapshot_hash(resources: nil, tick: nil)
         dead = @dead
         h = {
           "id" => @id,
@@ -319,7 +331,7 @@ module Starc
         }
 
         h["w"] = round2(@cooldown) if @cooldown.positive?
-        h["sel"] = selected_for.to_i if selected_for && selected_for.to_i != 0
+        h["res"] = resources.to_i unless resources.nil?
         h["tid"] = @target_id if @target_id && @target_id.positive?
         if @order != ORDER_NONE
           h["ord"] = @order

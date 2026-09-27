@@ -91,14 +91,16 @@ export interface WaterPlane {
   readonly mesh: THREE.Mesh;
   readonly material: WaterMaterialHandle;
   /**
-   * Advances the waves and re-centres the grid. Pass `capture` to also refresh
-   * the refracted-seabed texture; it is skipped entirely when the preset has no
-   * post effects, which is where the render target would have been paid for.
+   * Advances the waves, re-centres the grid and refreshes the refracted-seabed
+   * texture. `capture` is required rather than optional: the material is
+   * compiled with `USE_REFRACTION` on any post-FX preset, and a missing capture
+   * would leave `uRefractionMap` pointing at a 1x1 blank while the shader took
+   * its opaque branch — a dead path that silently draws mud.
    */
   update(
     elapsedSeconds: number,
     cameraPosition: THREE.Vector3,
-    capture?: { renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.Camera },
+    capture: { renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.Camera },
   ): void;
   dispose(): void;
 }
@@ -111,7 +113,7 @@ export function createWaterPlane(
   scene: THREE.Scene,
   map: MapDef,
   settings: QualitySettings,
-  sky?: SkySource,
+  sky: SkySource,
 ): WaterPlane | null {
   if (!map.water) return null;
   const handle = createWaterMaterial(map, settings, sky);
@@ -151,22 +153,24 @@ export function createWaterPlane(
     material: handle,
     update(elapsedSeconds, cameraPosition, capture): void {
       mesh.position.set(cameraPosition.x, TERRAIN_WATER_LEVEL + WATER_SURFACE_LIFT, cameraPosition.z);
-      if (capture && refract) {
-        capture.renderer.getDrawingBufferSize(bufferSize);
-        handle.setFrame(elapsedSeconds, bufferSize.x, bufferSize.y);
-        // Taken with the water hidden, so what it holds is the world behind
-        // the water: terrain, seabed, units, buildings.
-        const copy = ensureTarget();
-        mesh.visible = false;
-        const previous = capture.renderer.getRenderTarget();
-        capture.renderer.setRenderTarget(copy);
-        capture.renderer.render(capture.scene, capture.camera);
-        capture.renderer.setRenderTarget(previous);
-        mesh.visible = true;
-        handle.setRefractionTexture(copy.texture);
+      if (!refract) {
+        // No post effects: nothing renders into a target, so there is no
+        // refraction and the material was never compiled for one.
+        handle.setFrame(elapsedSeconds, 1, 1);
         return;
       }
-      handle.setFrame(elapsedSeconds, 1, 1);
+      capture.renderer.getDrawingBufferSize(bufferSize);
+      handle.setFrame(elapsedSeconds, bufferSize.x, bufferSize.y);
+      // Taken with the water hidden, so what it holds is the world behind
+      // the water: terrain, seabed, units, buildings.
+      const copy = ensureTarget();
+      mesh.visible = false;
+      const previous = capture.renderer.getRenderTarget();
+      capture.renderer.setRenderTarget(copy);
+      capture.renderer.render(capture.scene, capture.camera);
+      capture.renderer.setRenderTarget(previous);
+      mesh.visible = true;
+      handle.setRefractionTexture(copy.texture);
     },
     dispose(): void {
       scene.remove(mesh);

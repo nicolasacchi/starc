@@ -2,8 +2,8 @@
  * The state machine a game screen drives.
  *
  * Owns one cable connection and the whole live-match pipeline: snapshots in,
- * interpolation and prediction out, commands coalesced and rate-limited on the
- * way to the server, and reconnection with a clean resync when the socket dies.
+ * local prediction out, commands coalesced and rate-limited on the way to the
+ * server, and reconnection with a clean resync when the socket dies.
  *
  * Lifecycle, from the UI's point of view:
  *
@@ -25,8 +25,21 @@
  *   down; `dispose` additionally drops every event handler.
  *
  * The clock: snapshots carry the server's epoch millis, so the connection
- * estimates its offset from them (corrected by half the measured RTT) and the
- * renderer interpolates on *that* clock, delayed by two snapshot intervals.
+ * estimates its offset from them, corrected by half the measured RTT.
+ *
+ * ## What this module deliberately does not do
+ *
+ * It does not interpolate. The renderer already blends each entity between
+ * the two newest snapshots (`SceneManager.applySnapshot`/`update`), so a
+ * second interpolator here would smooth the same data twice and add a
+ * snapshot interval of latency for nothing. The render clock this connection
+ * keeps is used for one thing — folding local prediction into the frame the
+ * renderer is about to draw, through {@link predictedEntities}.
+ *
+ * That is also why {@link tick} matters even though the renderer drives its
+ * own smoothing: without it the predictor would never advance between
+ * snapshots, and a right-click would not move anything until the server
+ * answered.
  */
 import { PROTOCOL_VERSION, TICK_MS } from "@shared/protocol";
 import type {
@@ -34,18 +47,12 @@ import type {
   Command,
   LobbyChatLine,
   Rejection,
+  ProtocolEntity,
   ServerErrorCode,
   ServerMessage,
 } from "@shared/protocol";
 import { TypedEmitter } from "./events";
 import type { Unsubscribe } from "./events";
-import {
-  createWorldSample,
-  DEFAULT_INTERPOLATION_DELAY_MS,
-  Interpolator,
-  MAX_EXTRAPOLATION_MS,
-} from "./interpolation";
-import type { WorldSample } from "./interpolation";
 import { NetMetrics } from "./metrics";
 import { MovementPredictor } from "./prediction";
 import type { TerrainProbe, UnacknowledgedCommand } from "./prediction";
@@ -120,10 +127,8 @@ export interface GameConnectionOptions {
   transport?: ChannelTransport;
   /** Player id, when the caller already knows it. */
   playerId?: number;
-  /** Snapshots retained for interpolation and late-join resync. */
+  /** Snapshots retained for late-join and reconnect bookkeeping. */
   snapshotCapacity?: number;
-  /** Render clock lag behind the newest snapshot, ms. */
-  interpolationDelayMs?: number;
   /** Terrain queries for prediction; flat ground when absent. */
   terrain?: TerrainProbe;
   /** Command ceilings. */
@@ -142,7 +147,6 @@ export interface GameConnectionOptions {
 
 export class GameConnection {
   readonly snapshots: SnapshotBuffer;
-  readonly interpolator: Interpolator;
   readonly metrics: NetMetrics;
   readonly events = new TypedEmitter<GameConnectionEvents>();
 
@@ -154,11 +158,9 @@ export class GameConnection {
   private readonly maxIdsPerCommand: number;
   private readonly flushIntervalMs: number;
   private readonly maxCommandsPerSecond: number;
-  private readonly interpolationDelayMs: number;
   private readonly timer: TimerApi;
   private readonly uuid: () => string;
   private readonly reconnect: ReconnectController;
-  private readonly world: WorldSample = createWorldSample();
   private readonly terrain: TerrainProbe | undefined;
 
   private currentState: GameConnectionState = "idle";
@@ -195,14 +197,12 @@ export class GameConnection {
     this.maxIdsPerCommand = options.maxIdsPerCommand ?? MAX_IDS_PER_COMMAND;
     this.flushIntervalMs = 1000 / (options.maxBatchesPerSecond ?? MAX_BATCHES_PER_SECOND);
     this.maxCommandsPerSecond = options.maxCommandsPerSecond ?? MAX_COMMANDS_PER_SECOND;
-    this.interpolationDelayMs = options.interpolationDelayMs ?? DEFAULT_INTERPOLATION_DELAY_MS;
     this.uuid = options.uuid ?? defaultUuid;
     this.timer = options.timer ?? systemTimer;
 
     this.ownsTransport = options.transport === undefined;
     this.transport = options.transport ?? new CableTransport();
     this.snapshots = new SnapshotBuffer(options.snapshotCapacity);
-    this.interpolator = new Interpolator(this.snapshots);
     this.metrics = new NetMetrics();
 
     this.reconnect = new ReconnectController(() => this.transport.connect(this.url, this.token), {
@@ -411,26 +411,37 @@ export class GameConnection {
   }
 
   /**
-   * Blends the world for this frame with {@link Interpolator}, then overrides
-   * own units still running an unacknowledged order with their predicted
-   * position. Pass an explicit `renderTimeMs` to render a fixed instant
-   * (replays, tests).
+   * The entity table to draw, with local prediction folded in: an own unit
+   * still running an order the server has not echoed is drawn where this
+   * client has walked it, not where the last snapshot left it. Every other
+   * entity is the server's, untouched.
    *
-   * Exactly one interpolation path may run: if the renderer already blends
-   * `onSnapshot` entities itself, leave this alone — calling both smooths the
-   * same data twice and shows a frame of extra latency. Raw snapshots still
-   * reach `onSnapshot` and the metrics either way.
+   * This is what puts prediction on the screen. The renderer then blends
+   * between successive calls, so an own unit starts walking on the frame
+   * after the click rather than after the server has answered — and snaps back
+   * only if the server genuinely disagrees.
+   *
+   * Returns the input array unchanged when there is nothing to predict, so a
+   * match with no local orders allocates nothing here.
    */
-  sampleWorld(renderTimeMs?: number): WorldSample {
-    const newest = this.snapshots.latest();
-    const target = this.clampRenderTime(
-      renderTimeMs ?? this.serverTime() - this.interpolationDelayMs,
-      newest,
-    );
-    const sample = this.interpolator.sample(target, this.world);
-    this.applyPrediction(sample);
-    if (newest) this.metrics.recordInterpolationDelay(Math.max(0, newest.serverMs - target));
-    return sample;
+  predictedEntities(entities: readonly ProtocolEntity[]): readonly ProtocolEntity[] {
+    const predictor = this.predictor;
+    if (!predictor) return entities;
+
+    let out: ProtocolEntity[] | null = null;
+    for (let i = 0; i < entities.length; i++) {
+      const entity = entities[i];
+      if (entity.pl !== predictor.playerId) continue;
+      const unit = predictor.predicted(entity.id);
+      // Only a unit running an order the server has not echoed is overridden.
+      // Once the snapshot answers, the server's own position is both
+      // authoritative and already being extrapolated by the renderer, and
+      // predicting on top of that would make own units lead their own echo.
+      if (!unit || unit.localOrderTick === 0 || unit.st === "dead") continue;
+      if (out === null) out = entities.slice();
+      out[i] = { ...entity, x: unit.x, z: unit.z, ang: unit.ang, st: unit.st };
+    }
+    return out ?? entities;
   }
 
   /* --------------------------------------------------------------- inbound */
@@ -473,7 +484,6 @@ export class GameConnection {
     this.startInfo = msg;
     this.currentMatchId = msg.match_id;
     this.snapshots.clear();
-    this.interpolator.reset();
     this.metrics.reset();
     this.predictor?.reset();
     if (this.localPlayerId === null) this.localPlayerId = ownPlayerId(msg);
@@ -708,26 +718,6 @@ export class GameConnection {
     return this.predictor;
   }
 
-  /** Own units with a live, unconfirmed order override the blended position. */
-  private applyPrediction(sample: WorldSample): void {
-    if (!this.predictor) return;
-    for (const [id, unit] of this.predictor.predictions()) {
-      if (!unit.order) continue;
-      const view = sample.entities.get(id);
-      if (!view) continue;
-      view.x = unit.x;
-      view.z = unit.z;
-      view.ang = unit.ang;
-      view.st = unit.st;
-    }
-  }
-
-  /** Never render further ahead than the extrapolation cap allows. */
-  private clampRenderTime(target: number, newest: BufferedSnapshot | null): number {
-    if (!newest) return target;
-    const ceiling = newest.serverMs + MAX_EXTRAPOLATION_MS;
-    return target > ceiling ? ceiling : target;
-  }
 
   private updateClock(serverMs: number, receivedAtMs: number): void {
     // One-way delay is half the round trip, so the server clock at *arrival* was
@@ -743,10 +733,11 @@ export class GameConnection {
 
   /**
    * The resync path. Everything describing the pre-drop world is discarded —
-   * snapshots, interpolation pool, predictions, unacknowledged commands and the
-   * clock estimate — before the fresh `game:start` and snapshot stream arrive.
-   * That is what guarantees no ghost entities: the pool is empty, so the very
-   * next {@link sampleWorld} draws nothing until real data lands.
+   * snapshots, predictions, unacknowledged commands and the clock estimate —
+   * before the fresh `game:start` and snapshot stream arrive. That is what
+   * guarantees no ghost entities: the buffer is empty and the predictor has
+   * forgotten every unit, so the next frame draws nothing until real data
+   * lands.
    */
   private resync(): void {
     this.forgetWorld();
@@ -758,7 +749,6 @@ export class GameConnection {
     this.subscribedMatchId = null;
     this.lobbySubscribed = false;
     this.snapshots.clear();
-    this.interpolator.reset();
     this.predictor?.reset();
     this.metrics.reset();
     this.outbound.length = 0;

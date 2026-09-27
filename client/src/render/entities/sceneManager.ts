@@ -264,7 +264,9 @@ export class SceneManager {
     // The clouds share the dome's uniform objects, so the deck is lit by the
     // exact sun the sky is painting rather than by a second guess at it.
     this.clouds = createClouds(this.scene, this.map, settings, this.sky);
-    this.water = createWaterPlane(this.scene, this.map, settings);
+    // The water shares the dome's uniform objects for the same reason the
+    // clouds do: the sea must reflect the sun the sky is actually painting.
+    this.water = createWaterPlane(this.scene, this.map, settings, this.sky);
     this.lighting = new LightingRig(this.scene, this.map, settings);
     this.shadows = new ShadowSystem(this.scene, settings);
     this.environment = this.renderer === null
@@ -562,7 +564,15 @@ export class SceneManager {
 
     this.sky?.update(this.elapsed);
     this.clouds?.update(this.elapsed, this.perspective.position);
-    this.water?.update(this.elapsed, this.perspective.position);
+    // The capture renders the frame behind the water, so it has to happen
+    // before this frame's draw — which `render()` does next.
+    if (this.water !== null && this.renderer !== null) {
+      this.water.update(this.elapsed, this.perspective.position, {
+        renderer: this.renderer,
+        scene: this.scene,
+        camera: this.perspective,
+      });
+    }
     this.lighting?.update(this.elapsed);
     this.shadows?.update(this.perspective, this.terrain);
     this.environment?.update();

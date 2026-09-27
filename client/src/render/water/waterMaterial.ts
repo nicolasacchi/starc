@@ -29,7 +29,7 @@ import * as THREE from "three";
 import type { MapDef } from "@shared/protocol";
 import type { QualitySettings } from "@render/core/quality";
 import { TERRAIN_WATER_LEVEL, acquireTerrainFieldTexture, releaseTerrainFieldTexture } from "@render/terrain/terrainMaterial";
-import { GLSL_SKY_SCATTERING, createSkyUniforms, type SkySource, type SkyUniforms } from "@render/sky/skyMaterial";
+import { GLSL_SKY_SCATTERING, type SkySource } from "@render/sky/skyMaterial";
 
 /**
  * The surface sits a few centimetres above the terrain's zero plane. The map
@@ -308,23 +308,22 @@ export interface WaterMaterialHandle {
 export function createWaterMaterial(
   map: MapDef,
   settings: QualitySettings,
-  sky?: SkySource,
+  sky: SkySource,
 ): WaterMaterialHandle {
   // Sharing the sky's uniform objects is what keeps the reflection in step with
-  // the sky on screen. Standalone, the water still lights correctly.
-  const skyUniforms: SkyUniforms = sky ? sky.uniforms : createSkyUniforms();
-  if (!sky) {
-    skyUniforms.uSunDirection.value.set(0.4, 0.8, 0.45).normalize();
-  }
+  // the sky on screen, so `sky` is required rather than optional: standalone
+  // uniforms would silently freeze the water at a midday sun under a sunset
+  // sky, and there is no way for the shader to notice.
+  const skyUniforms = sky.uniforms;
 
   const chop = buildNormalTexture(NORMAL_MAP_SIZE, settings.anisotropy);
   const field = acquireTerrainFieldTexture(map);
   const useRefraction = settings.postFx;
 
-  // Stands in until the caller captures a frame, so the sampler is never
-  // unbound. It is a plausible seabed rather than black: if the refraction pass
-  // is never wired up, shallow water still reads as water over sand instead of
-  // a black hole, and deep water absorbs it away entirely.
+  // Only ever read before the first capture on a post-FX preset, so the sampler
+  // is never unbound. It is a plausible seabed rather than black: shallow
+  // water still reads as water over sand instead of a black hole, and deep
+  // water absorbs it away entirely.
   const blank = new THREE.DataTexture(new Uint8Array([110, 92, 66, 255]), 1, 1);
   blank.needsUpdate = true;
 

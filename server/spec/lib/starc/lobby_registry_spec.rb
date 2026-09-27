@@ -280,13 +280,6 @@ RSpec.describe Starc::LobbyRegistry do
       expect(registry.chat_history(5).size).to eq(1)
     end
 
-    it "clears a room on request" do
-      registry.push_chat(5, line("gg"))
-      registry.clear_chat(5)
-
-      expect(registry.chat_history(5)).to be_empty
-    end
-
     it "has no history for a room nobody has spoken in" do
       expect(registry.chat_history(999)).to eq([])
     end

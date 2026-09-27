@@ -20,9 +20,10 @@
  *   a placement is accepted) and the cap is the base supply plus the
  *   `supply_provided` of our own completed buildings.
  * - **minerals / vespene** — the server echoes one spendable balance per player
- *   on that player's own workers (`res`). The split is attributed, not
- *   simulated: cargo deliveries arrive as `res` events with an exact amount,
- *   so whatever growth those events do not explain is geyser income. The two
+ *   on that player's own entities (`res`, PROTOCOL.md §5). The split is
+ *   attributed, not simulated: cargo deliveries arrive as `res` events with an
+ *   exact amount, so whatever growth those events do not explain is geyser
+ *   income. The two
  *   numbers always sum back to the echoed balance, and the server still has
  *   the last word — an over-spend comes back as an `insufficient_resources`
  *   rejection.
@@ -192,7 +193,12 @@ export class GameState {
     return this._countdownMs;
   }
 
-  /** Highest `from_tick` the server has acknowledged from us. */
+  /**
+   * The highest `from_tick` the server has processed for *any* client in this
+   * match. The snapshot is one broadcast (PROTOCOL.md §5), so this is a
+   * match-wide progress figure and must never be used to retire this client's
+   * own unacknowledged commands — see `MovementPredictor`.
+   */
   get ack(): number {
     return this._lastAck;
   }

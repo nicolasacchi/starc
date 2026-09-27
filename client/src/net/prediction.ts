@@ -20,13 +20,19 @@
  * - Movement integrates in fixed `TICK_MS` steps, matching the server's step
  *   order (PROTOCOL.md §6), clamped to the unit's roster speed and to passable
  *   ground, so a prediction can never outrun what the server would do.
- * - An unacknowledged batch is kept keyed by `from_tick` until a snapshot's
- *   `ack` covers it. If the predicted position has drifted past
- *   {@link MovementPredictorOptions.snapThreshold} at that point, the server
- *   disagreed with us and we snap to it rather than creep.
- *
- * Everything is bounded: the unacknowledged map holds at most
- * `maxPendingBatches` entries, oldest evicted.
+ * - Facing uses the server's convention, `atan2(dx, dz)`, because
+ *   `Systems::Movement` does and three.js maps `rotation.y` onto `(sin θ, cos θ)`
+ *   with forward `+Z`. Any other mapping turns a predicted unit 90° off on the
+ *   axes, and the error only shows when the unit's path lies on one.
+ * - A local order is retired when the *server's own snapshot* reports a move
+ *   order for that unit, which is a genuinely per-client signal. It is
+ *   deliberately not retired on the envelope's `ack`: that field is the
+ *   highest `from_tick` processed for *any* client in the match
+ *   (PROTOCOL.md §5), so a client at 950 reading 1000 because somebody else
+ *   got there first would throw away clicks the server has never seen.
+ * - An order the server never echoes is given up on after
+ *   {@link MovementPredictorOptions.orderTimeoutMs}, so a lost send retires
+ *   the order instead of walking a unit across the map forever.
  */
 import { TICK_MS } from "@shared/protocol";
 import type { Command, EntityState, OrderKind, ProtocolEntity } from "@shared/protocol";
@@ -67,6 +73,15 @@ export interface PredictedUnit {
   air: boolean;
   order: PendingOrder | null;
   orderKind: OrderKind;
+  /**
+   * `from_tick` of the local batch that issued {@link order}, or 0 when the
+   * order came from the server. The server confirming *any* order for this
+   * unit is what retires the local one, so this is the whole of the
+   * unacknowledged-command bookkeeping — there is no per-batch map to keep.
+   */
+  localOrderTick: number;
+  /** When that batch went out, for the give-up timeout. */
+  localOrderAtMs: number;
   /** Ticks since the unit last moved; lets callers park an idle unit. */
   stalledTicks: number;
 }
@@ -80,10 +95,8 @@ export interface MovementPredictorOptions {
   terrain?: TerrainProbe;
   /** Positional disagreement beyond this snaps to the server, in metres. */
   snapThreshold?: number;
-  /** How many unacknowledged batches to retain before evicting the oldest. */
-  maxPendingBatches?: number;
-  /** Give up on a batch the server never acknowledges after this long, ms. */
-  pendingTimeoutMs?: number;
+  /** Give up on a local order the server never echoes, after this long, ms. */
+  orderTimeoutMs?: number;
 }
 
 /**
@@ -97,8 +110,7 @@ export interface TerrainProbe {
 }
 
 export const DEFAULT_SNAP_THRESHOLD_M = 1.25;
-export const DEFAULT_PENDING_BATCHES = 64;
-export const DEFAULT_PENDING_TIMEOUT_MS = 3000;
+export const DEFAULT_ORDER_TIMEOUT_MS = 3000;
 /** PROTOCOL.md §4: the world is 0 ≤ x, z < 256. */
 const PROTOCOL_WORLD_SIZE = 256;
 /** Arrival tolerance, in metres, before a unit is considered stopped. */
@@ -111,11 +123,8 @@ export class MovementPredictor {
   readonly snapThreshold: number;
   private readonly worldSize: number;
   private readonly terrain: TerrainProbe | null;
-  private readonly maxPendingBatches: number;
-  private readonly pendingTimeoutMs: number;
+  private readonly orderTimeoutMs: number;
   private readonly units = new Map<number, PredictedUnit>();
-  /** Unacknowledged batches, keyed by the `from_tick` they were stamped with. */
-  private readonly pending = new Map<number, UnacknowledgedCommand[]>();
   private correctionPending = false;
   private lastCorrectionTick = 0;
   private lastErrorMetres = 0;
@@ -126,8 +135,7 @@ export class MovementPredictor {
     this.worldSize = options.worldSize ?? PROTOCOL_WORLD_SIZE;
     this.terrain = options.terrain ?? null;
     this.snapThreshold = options.snapThreshold ?? DEFAULT_SNAP_THRESHOLD_M;
-    this.maxPendingBatches = Math.max(1, options.maxPendingBatches ?? DEFAULT_PENDING_BATCHES);
-    this.pendingTimeoutMs = options.pendingTimeoutMs ?? DEFAULT_PENDING_TIMEOUT_MS;
+    this.orderTimeoutMs = options.orderTimeoutMs ?? DEFAULT_ORDER_TIMEOUT_MS;
   }
 
   /** Units currently predicted, keyed by entity id. */
@@ -139,21 +147,8 @@ export class MovementPredictor {
     return this.units.get(id) ?? null;
   }
 
-  /** Highest unacknowledged `from_tick`, or the last acked tick when idle. */
-  pendingTick(): number {
-    let highest = this.tickCursor;
-    for (const tick of this.pending.keys()) if (tick > highest) highest = tick;
-    return highest;
-  }
-
-  pendingCount(): number {
-    let total = 0;
-    for (const batch of this.pending.values()) total += batch.length;
-    return total;
-  }
-
   /**
-   * Advances `unit` toward `(x, y)` by at most `speed * dt`, returns the
+   * Advances `unit` toward `(x, z)` by at most `speed * dt`, returns the
    * distance actually covered, and clears the order on arrival. Allocation-free.
    */
   predictMove(unit: PredictedUnit, x: number, z: number, dt: number): number {
@@ -169,8 +164,7 @@ export class MovementPredictor {
     if (distance <= ARRIVAL_EPSILON) {
       unit.x = targetX;
       unit.z = targetZ;
-      unit.order = null;
-      unit.orderKind = 0;
+      this.clearOrder(unit);
       unit.st = "idle";
       unit.stalledTicks++;
       return 0;
@@ -181,52 +175,40 @@ export class MovementPredictor {
     const uz = dz * inv;
     const travel = Math.min(maxStep, distance);
     const moved = this.advance(unit, ux * travel, uz * travel, unit.air);
-    unit.ang = Math.atan2(uz, ux);
+    // The server's convention, not the intuitive one: `Systems::Movement` sets
+    // `angle = atan2(dx, dz)`, and three.js turns `rotation.y` into the
+    // heading `(sin θ, cos θ)` with `+Z` forward. `atan2(dz, dx)` would face a
+    // predicted unit 90° off on both axes, and look right only on a diagonal.
+    unit.ang = Math.atan2(ux, uz);
     if (moved > ARRIVAL_EPSILON) {
       unit.st = "moving";
       unit.stalledTicks = 0;
     } else {
       // Blocked on every axis: the order is unreachable, so drop it.
       unit.st = "idle";
-      unit.order = null;
-      unit.orderKind = 0;
+      this.clearOrder(unit);
       unit.stalledTicks++;
     }
     return moved;
   }
 
   /**
-   * Registers a locally-issued batch keyed by the `from_tick` it was stamped
-   * with, and applies its orders immediately so the unit starts walking before
-   * the server has seen anything. Returns the batch for the caller to track.
+   * Applies a locally-issued batch immediately so the unit starts walking
+   * before the server has seen anything, and returns the batch so the caller
+   * can put it on the wire.
+   *
+   * The batch is not filed anywhere here. What has to survive is only *which
+   * of our units is running an order the server has not echoed*, and that is
+   * per-unit state — so the units carry it and a lost or replayed batch
+   * cannot desynchronise a map keyed by `from_tick`.
    */
   queueCommand(commands: Command[], fromTick: number, id = `local-${fromTick}`): UnacknowledgedCommand {
     const batch: UnacknowledgedCommand = { id, fromTick, commands, sentAtMs: Date.now() };
-    if (fromTick >= this.tickCursor) {
-      const bucket = this.pending.get(fromTick);
-      if (bucket) bucket.push(batch);
-      else this.pending.set(fromTick, [batch]);
-      while (this.pending.size > this.maxPendingBatches) {
-        const oldest = this.pending.keys().next();
-        if (oldest.done) break;
-        this.pending.delete(oldest.value);
-      }
-    }
-    // The order applies whether or not the server has already seen the tick:
-    // the player clicked, and the unit should be moving now.
     for (const command of commands) {
-      if (command.c === "move") this.issueMove(command.ids, command.x, command.z);
+      if (command.c === "move") this.issueMove(command.ids, command.x, command.z, fromTick, batch.sentAtMs);
       else if (command.c === "stop" || command.c === "hold") this.issueStop(command.ids);
     }
     return batch;
-  }
-
-  /** Drops every batch the server has confirmed, at or below `ackTick`. */
-  acknowledge(ackTick: number): void {
-    this.tickCursor = Math.max(this.tickCursor, ackTick);
-    for (const tick of [...this.pending.keys()]) {
-      if (tick <= ackTick) this.pending.delete(tick);
-    }
   }
 
   /**
@@ -255,12 +237,9 @@ export class MovementPredictor {
    * what stops a reconnect from leaving ghosts on screen.
    */
   applySnapshot(snapshot: Snapshot): void {
-    this.acknowledge(snapshot.ack);
     this.tickCursor = Math.max(this.tickCursor, snapshot.tick);
-    this.expireStaleOrders(Date.now());
+    this.expireLostOrders(Date.now());
 
-    // Which of our units still have a move the server has not confirmed?
-    const unacknowledged = this.unacknowledgedMoveTargets();
     const stillOwned = new Set<number>();
     for (const entity of snapshot.entities) {
       if (entity.pl !== this.playerId) continue;
@@ -273,25 +252,41 @@ export class MovementPredictor {
       const error = Math.hypot(unit.x - entity.x, unit.z - entity.z);
       if (error > this.lastErrorMetres) this.lastErrorMetres = error;
 
-      // Re-base on the server's authoritative position; local orders survive.
-      unit.x = entity.x;
-      unit.z = entity.z;
-      unit.y = entity.y;
-      unit.hp = entity.hp;
-      unit.ang = entity.ang;
-      unit.st = entity.st;
-      if (unacknowledged.has(entity.id)) {
-        // Keep predicting toward our own, still-unconfirmed destination.
-      } else {
-        unit.orderKind = entity.ord ?? 0;
-        unit.order = unit.orderKind === 1 ? { x: entity.ox ?? 0, z: entity.oz ?? 0 } : null;
+      // The server reporting *any* order for this unit is proof it consumed a
+      // command about it, so the local order is retired and the server's
+      // answer is adopted — even when the answer is a different destination,
+      // which is what a queued or superseded order looks like.
+      const serverOrder = entity.ord ?? 0;
+      if (serverOrder !== 0) {
+        this.clearOrder(unit);
+        unit.orderKind = serverOrder;
+        unit.order = serverOrder === 1 ? { x: entity.ox ?? 0, z: entity.oz ?? 0 } : null;
       }
 
-      if (error > this.snapThreshold) {
-        // The server disagreed materially: the re-base above *is* the snap.
-        this.correctionPending = true;
-        this.lastCorrectionTick = snapshot.tick;
-        this.lastErrorMetres = error;
+      // While a click is still in flight the server's position is stale by
+      // construction: it describes a tick from before the server had the
+      // order. Re-basing onto it on every snapshot would throw the lead away
+      // and leave prediction with nothing to show, so the local position
+      // stands — and only a disagreement past the snap threshold (a push, a
+      // teleport, an order the server refused) pulls it back.
+      const unconfirmed = unit.localOrderTick > 0;
+      if (!unconfirmed || error > this.snapThreshold) {
+        unit.x = entity.x;
+        unit.z = entity.z;
+        unit.y = entity.y;
+        unit.ang = entity.ang;
+        unit.st = entity.st;
+        if (error > this.snapThreshold) {
+          // The server disagreed materially: the re-base above *is* the snap.
+          this.correctionPending = true;
+          this.lastCorrectionTick = snapshot.tick;
+          this.lastErrorMetres = error;
+        }
+      }
+      unit.hp = entity.hp;
+      if (!unconfirmed && serverOrder === 0) {
+        unit.order = null;
+        unit.orderKind = 0;
       }
     }
 
@@ -314,10 +309,9 @@ export class MovementPredictor {
     }
   }
 
-  /** Forgets every unit, pending batch and correction — used on disconnect. */
+  /** Forgets every unit and correction — used on disconnect. */
   reset(): void {
     this.units.clear();
-    this.pending.clear();
     this.correctionPending = false;
     this.lastCorrectionTick = 0;
     this.lastErrorMetres = 0;
@@ -326,7 +320,7 @@ export class MovementPredictor {
 
   /* ------------------------------------------------------------- internals */
 
-  private issueMove(ids: number[], x: number, z: number): void {
+  private issueMove(ids: number[], x: number, z: number, fromTick: number, sentAtMs: number): void {
     const targetX = clamp(x, 0, this.worldSize);
     const targetZ = clamp(z, 0, this.worldSize);
     for (const id of ids) {
@@ -334,6 +328,8 @@ export class MovementPredictor {
       if (!unit || unit.st === "dead") continue;
       unit.order = { x: targetX, z: targetZ };
       unit.orderKind = 1;
+      unit.localOrderTick = fromTick;
+      unit.localOrderAtMs = sentAtMs;
       unit.st = "moving";
     }
   }
@@ -342,31 +338,35 @@ export class MovementPredictor {
     for (const id of ids) {
       const unit = this.units.get(id);
       if (!unit) continue;
-      unit.order = null;
-      unit.orderKind = 0;
+      this.clearOrder(unit);
       if (unit.st !== "dead") unit.st = "idle";
     }
   }
 
-  /** Ids with a move order the server has not yet acknowledged. */
-  private unacknowledgedMoveTargets(): Set<number> {
-    const ids = new Set<number>();
-    for (const bucket of this.pending.values()) {
-      for (const batch of bucket) {
-        for (const command of batch.commands) {
-          if (command.c === "move") for (const id of command.ids) ids.add(id);
-        }
-      }
-    }
-    return ids;
+  /**
+   * Forgets an order outright — destination, kind, and the stamp of the batch
+   * that issued it. Every path that ends a local order goes through here, so
+   * "is this unit running an order the server has not seen" is one field
+   * rather than a table that can drift out of step with it.
+   */
+  private clearOrder(unit: PredictedUnit): void {
+    unit.order = null;
+    unit.orderKind = 0;
+    unit.localOrderTick = 0;
+    unit.localOrderAtMs = 0;
   }
 
-  /** Drops batches the server never confirmed, so a lost send cannot loop. */
-  private expireStaleOrders(nowMs: number): void {
-    for (const [tick, bucket] of this.pending) {
-      const kept = bucket.filter((batch) => nowMs - batch.sentAtMs <= this.pendingTimeoutMs);
-      if (kept.length === 0) this.pending.delete(tick);
-      else if (kept.length !== bucket.length) this.pending.set(tick, kept);
+  /**
+   * Gives up on orders the server never echoed within the timeout. A send that
+   * never reached the server would otherwise walk a unit across the map for
+   * the rest of the match on the strength of a click that was lost.
+   */
+  private expireLostOrders(nowMs: number): void {
+    for (const unit of this.units.values()) {
+      if (unit.localOrderTick === 0) continue;
+      if (nowMs - unit.localOrderAtMs <= this.orderTimeoutMs) continue;
+      this.clearOrder(unit);
+      if (unit.st !== "dead") unit.st = "idle";
     }
   }
 
@@ -420,6 +420,8 @@ export class MovementPredictor {
       air: def?.kind === "unit" ? def.movement === "air" : false,
       order: null,
       orderKind: entity.ord ?? 0,
+      localOrderTick: 0,
+      localOrderAtMs: 0,
       stalledTicks: 0,
     };
     if (unit.orderKind === 1) unit.order = { x: entity.ox ?? 0, z: entity.oz ?? 0 };

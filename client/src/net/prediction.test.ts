@@ -4,7 +4,7 @@
  * (visible as a stutter or a rubber band when the snapshot arrives), and a
  * unit that never forgets the player's click.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SNAP_THRESHOLD_M, MovementPredictor } from "./prediction";
 import type { PredictedUnit } from "./prediction";
 import type { Snapshot } from "./snapshotBuffer";
@@ -85,11 +85,29 @@ describe("MovementPredictor", () => {
     expect(unit.st).toBe("idle");
   });
 
-  it("faces the direction of travel", () => {
+  it("faces the way the server does, not the way that reads naturally", () => {
     predictor.applySnapshot(snap(1, [entity(1)]));
+
+    // `Systems::Movement` sets `angle = atan2(dx, dz)` and three.js turns
+    // `rotation.y` into the heading `(sin θ, cos θ)` with `+Z` forward, so
+    // straight along +Z is 0 and straight along +X is π/2. The intuitive
+    // `atan2(dz, dx)` is 90° out on both axes and only looks right on the
+    // diagonals, which is why a wrong convention survives casual play.
     const unit = predictor.predicted(1)!;
+    unit.x = 0;
+    unit.z = 0;
     predictor.predictMove(unit, 0, 10, TICK_MS);
+    expect(unit.ang).toBeCloseTo(0, 6);
+
+    unit.x = 0;
+    unit.z = 0;
+    predictor.predictMove(unit, 10, 0, TICK_MS);
     expect(unit.ang).toBeCloseTo(Math.PI / 2, 6);
+
+    unit.x = 0;
+    unit.z = 0;
+    predictor.predictMove(unit, 10, 10, TICK_MS);
+    expect(unit.ang).toBeCloseTo(Math.PI / 4, 6);
   });
 
   it("clamps a destination outside the world to the map edge", () => {
@@ -112,29 +130,17 @@ describe("MovementPredictor", () => {
     expect(unit.st).toBe("moving");
   });
 
-  it("drops only the batches the server has acknowledged", () => {
-    predictor.applySnapshot(snap(0, [entity(1)]));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 1, z: 0 }], 10, "a");
-    predictor.queueCommand([{ c: "move", ids: [1], x: 2, z: 0 }], 12, "b");
-    predictor.queueCommand([{ c: "move", ids: [1], x: 3, z: 0 }], 15, "c");
-    expect(predictor.pendingCount()).toBe(3);
-
-    predictor.acknowledge(12);
-
-    // Losing an unacknowledged click silently cancels the player's order.
-    expect(predictor.pendingCount()).toBe(1);
-    expect(predictor.pendingTick()).toBe(15);
-  });
-
-  it("keeps predicting toward a local order the server has not confirmed", () => {
+  it("keeps a click the server has not echoed even when the match-wide ack is past it", () => {
     predictor.applySnapshot(snap(10, [entity(1, { x: 0 })], 10));
     predictor.queueCommand([{ c: "move", ids: [1], x: 50, z: 0 }], 10);
     predictor.update(4);
     expect(predictor.predicted(1)!.x).toBeGreaterThan(0);
 
-    // ack is still 9, so the server has not consumed tick 10's order: the
-    // click must survive the re-base.
-    predictor.applySnapshot(snap(11, [entity(1, { x: 0, ord: 0 })], 9));
+    // The server has no order for this unit yet, so it has not seen the
+    // click — but `ack` is 1000 because some *other* client's batch got
+    // there first. Retiring on `ack` would drop a live order on the floor
+    // and freeze the unit where the server last put it.
+    predictor.applySnapshot(snap(11, [entity(1, { x: 0, ord: 0 })], 1000));
     const unit = predictor.predicted(1)!;
     expect(unit.order).toEqual({ x: 50, z: 0 });
     predictor.update(1);
@@ -144,18 +150,53 @@ describe("MovementPredictor", () => {
     expect(unit.st).toBe("moving");
   });
 
-  it("adopts the server's order once the local batch is acknowledged", () => {
+  it("adopts the server's answer the moment the snapshot echoes an order", () => {
     predictor.applySnapshot(snap(10, [entity(1)], 10));
     predictor.queueCommand([{ c: "move", ids: [1], x: 50, z: 0 }], 10);
-    predictor.acknowledge(10);
 
+    // A destination that is not the one we sent is what a queued or
+    // superseded order looks like; the server's answer wins either way.
     predictor.applySnapshot(snap(11, [entity(1, { ord: 1, ox: 12, oz: 0 })], 11));
-    expect(predictor.predicted(1)!.order).toEqual({ x: 12, z: 0 });
+    const unit = predictor.predicted(1)!;
+    expect(unit.order).toEqual({ x: 12, z: 0 });
+    expect(unit.localOrderTick).toBe(0);
+  });
+
+  it("stops predicting once the unit is no longer ours to override", () => {
+    predictor.applySnapshot(snap(10, [entity(1, { x: 0 })], 10));
+    predictor.queueCommand([{ c: "move", ids: [1], x: 50, z: 0 }], 10);
+    predictor.update(2);
+    expect(predictor.predicted(1)!.localOrderTick).toBe(10);
+
+    predictor.applySnapshot(snap(11, [entity(1, { x: 0, st: "moving", ord: 1, ox: 50, oz: 0 })], 11));
+    // The echo is the server confirming it consumed a command about this
+    // unit, so the renderer gets the server's own position from here on.
+    expect(predictor.predicted(1)!.localOrderTick).toBe(0);
+  });
+
+  it("gives up on a local order the server never echoes", () => {
+    vi.useFakeTimers();
+    try {
+      const impatient = new MovementPredictor({ playerId: 1, orderTimeoutMs: 1_000 });
+      impatient.applySnapshot(snap(1, [entity(1)]));
+      impatient.queueCommand([{ c: "move", ids: [1], x: 50, z: 0 }], 1);
+      vi.advanceTimersByTime(500);
+      impatient.update(1);
+      expect(impatient.predicted(1)!.x).toBeGreaterThan(0);
+
+      vi.advanceTimersByTime(2_000);
+      impatient.applySnapshot(snap(2, [entity(1, { x: 0 })]));
+      // A send that never reached the server would otherwise walk a unit
+      // across the map for the rest of the match.
+      expect(impatient.predicted(1)!.order).toBeNull();
+      expect(impatient.predicted(1)!.st).toBe("idle");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("requests a correction when the server disagrees by more than the threshold", () => {
     predictor.applySnapshot(snap(10, [entity(1, { x: 0 })], 10));
-    predictor.acknowledge(10);
     expect(predictor.needsCorrection()).toBe(false);
 
     // Locally walked 20 m; the server still has us at the origin.
@@ -173,7 +214,6 @@ describe("MovementPredictor", () => {
 
   it("does not request a correction for disagreement inside the threshold", () => {
     predictor.applySnapshot(snap(10, [entity(1, { x: 0 })], 10));
-    predictor.acknowledge(10);
     predictor.predictMove(predictor.predicted(1)!, 100, 0, 100); // 0.4 m
     predictor.applySnapshot(snap(11, [entity(1, { x: 0 })], 11));
     // Snapping on every millimetre of jitter is what makes a unit vibrate.
@@ -213,15 +253,15 @@ describe("MovementPredictor", () => {
     expect(unit.st).toBe("idle");
   });
 
-  it("evicts the oldest unacknowledged batches past the retention bound", () => {
-    const bounded = new MovementPredictor({ playerId: 1, maxPendingBatches: 4 });
-    bounded.applySnapshot(snap(0, [entity(1)]));
+  it("keeps only the newest click's destination, however many are queued", () => {
+    predictor.applySnapshot(snap(0, [entity(1)]));
     for (let i = 1; i <= 20; i++) {
-      bounded.queueCommand([{ c: "move", ids: [1], x: i, z: 0 }], i, `batch-${i}`);
+      predictor.queueCommand([{ c: "move", ids: [1], x: i, z: 0 }], i, `batch-${i}`);
     }
-    // Unbounded growth here is a leak on a laggy connection.
-    expect(bounded.pendingCount()).toBe(4);
-    expect(bounded.pendingTick()).toBe(20);
+    // Every queued batch is remembered per unit rather than in a growing
+    // table, so a long click-spam cannot leak — and the last click is the one
+    // the unit actually walks to.
+    expect(predictor.predicted(1)!.order).toEqual({ x: 20, z: 0 });
   });
 
   it("keeps predicting after a long stall by bounding the catch-up", () => {
@@ -232,7 +272,7 @@ describe("MovementPredictor", () => {
     expect(predictor.predicted(1)!.x).toBeLessThanOrEqual(MARINE_SPEED * 0.4 + 1e-9);
   });
 
-  it("reset forgets units, pending batches and the correction flag", () => {
+  it("reset forgets units and the correction flag", () => {
     predictor.applySnapshot(snap(10, [entity(1, { x: 0 })], 10));
     predictor.queueCommand([{ c: "move", ids: [1], x: 9, z: 0 }], 10);
     predictor.applySnapshot(snap(11, [entity(1, { x: 50 })], 11));
@@ -240,7 +280,6 @@ describe("MovementPredictor", () => {
     predictor.reset();
 
     expect(predictor.predictions().size).toBe(0);
-    expect(predictor.pendingCount()).toBe(0);
     expect(predictor.needsCorrection()).toBe(false);
   });
 

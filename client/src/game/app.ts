@@ -796,19 +796,51 @@ export class App implements UiHost {
     if (!this.state.started) return;
     this.state.applySnapshot({ tick: msg.tick, entities: msg.entities, events: msg.events });
     this.state.setAck(msg.ack);
-    // The scene keeps its own interpolation pair, so it takes the raw 10 Hz
-    // table exactly as it arrived. This is the *only* thing that ever puts a
-    // unit on the screen: the state holder and the HUD are readouts, not
-    // drawing, so a snapshot that stops here leaves an empty world behind
-    // fully populated readouts. It also plays the events, before diffing, so
-    // a `death` still finds the view it is about to remove.
-    this.scene?.applySnapshot({ tick: msg.tick, entities: msg.entities, events: msg.events });
+    // The scene keeps its own interpolation pair, so it takes a 10 Hz table
+    // and blends it. This is the *only* thing that ever puts a unit on the
+    // screen: the state holder and the HUD are readouts, not drawing, so a
+    // snapshot that stops here leaves an empty world behind fully populated
+    // readouts. It also plays the events, before diffing, so a `death` still
+    // finds the view it is about to remove.
+    //
+    // Two things are added on the way in, both of which cannot come off the
+    // wire: `sel`, because a snapshot is one broadcast and only this client
+    // knows which seat is its own (PROTOCOL.md §5), and local prediction, so
+    // a unit the player just moved starts walking on the next frame instead
+    // of after the server has answered.
+    this.scene?.applySnapshot({
+      tick: msg.tick,
+      entities: this.viewTable(msg.entities),
+      events: msg.events,
+    });
     this.refreshHud();
     // `applySnapshot` has already turned the alerts into floating text; the
     // toast is the HUD's own half of the same event.
     for (const event of msg.events) {
       if (event.e === "alert") this.hud?.alert(event.text, "warn");
     }
+  }
+
+  /**
+   * The table the renderer draws: the server's, with this viewer's colour
+   * state stamped on and local prediction folded in.
+   *
+   * The relation lookup is memoised per snapshot, so a 200-entity frame costs
+   * one `Map` of players rather than 200 team comparisons.
+   */
+  private viewTable(entities: readonly ProtocolEntity[]): readonly ProtocolEntity[] {
+    const conn = this.conn;
+    const relation = new Map<number, ProtocolEntity["sel"]>();
+    for (const entity of entities) {
+      if (relation.has(entity.pl)) continue;
+      const rel = this.state.relationOfPlayer(entity.pl);
+      relation.set(entity.pl, rel === "own" ? 1 : rel === "ally" ? 2 : 3);
+    }
+    const predicted = conn ? conn.predictedEntities(entities) : entities;
+    return predicted.map((entity) => {
+      const sel = relation.get(entity.pl) ?? 1;
+      return entity.sel === sel ? entity : { ...entity, sel };
+    });
   }
 
   private onGameEnd(msg: EndMessage): void {

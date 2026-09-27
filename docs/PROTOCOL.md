@@ -237,8 +237,13 @@ plus per-client bookkeeping, and it makes late joiners and reconnects free.
 }
 ```
 
-`ack` is the highest `from_tick` the server has processed from this client;
-the client may drop prediction history at or below it.
+`ack` is the highest `from_tick` the server has processed **for any client in
+this match** — a snapshot is one broadcast, so one figure cannot be
+per-client. A client must therefore never use it to retire its own
+unacknowledged command history: a client whose last batch went out at 950
+would read 1000 because somebody else got there first, and would drop orders
+the server has never seen. A client confirms its own order by watching the
+entity's `ord`/`ox`/`oz` come back matching what it sent.
 
 ### Entity
 
@@ -248,14 +253,17 @@ the client may drop prediction history at or below it.
   "hp": 45, "hp_max": 45, "mp": 0, "mp_max": 0,
   "ang": 1.5708, "st": "idle",
   "w": 0.0,               // weapon cooldown, seconds remaining
-  "sel": 0,               // selected for whom: 0 none, 1 self, 2 ally, 3 enemy
+  "sel": 0,               // colour state: 0 none, 1 self, 2 ally, 3 enemy
+                          // (client-derived — see below)
   "tid": 0,               // current target entity id, 0 = none
   "ord": 0,               // 0 = none, else 1 move / 2 attack / 3 harvest / 4 patrol
   "ox": 0.0, "oz": 0.0,   // order destination
   "rx": 40.0, "rz": 40.0,   // rally point, omitted when unset
   "prog": 0.0,            // construction / production progress 0..1
   "cargo": 0,             // resource units carried
-  "res": 200,             // player resources (only on the player's own workers)
+  "res": 200,             // the OWNING player's spendable balance, minerals and
+                          // vespene together; on every entity, so a client reads
+                          // its own figure off its own entities
   "n": 8,                 // queued production count
   "b": 0                  // active ability buff bitmask
 }
@@ -270,7 +278,9 @@ their own height field, or units visibly float or sink.
 `st` is one of: `idle, moving, attacking, harvesting, returning, building,
 training, casting, dead`.
 
-`sel` is advisory colour state; clients may recompute it locally.
+`sel` is advisory colour state and is **not sent by the server**: one
+broadcast cannot be per-viewer, so a client that needs it derives it from
+`pl` and the team table in `game:start`.
 
 ### Events
 
@@ -295,15 +305,16 @@ text. They are never replayed for interpolation.
 ```json
 {
   "v": 1, "t": "game:ended", "ts": 0, "tick": 9123,
-  "winner": 8, "reason": "defeat", "duration_ms": 456150,
-  "scores": [ { "player_id": 7, "race": "terran", "result": "defeat",
+  "winner": 8, "reason": "annihilation", "duration_ms": 456150,
+  "scores": [ { "player_id": 7, "race": "terran", "result": "loss",
                 "kills": 41, "deaths": 22, "resources_mined": 12450,
                 "units_built": 88, "army_value": 3120 } ],
   "replay_url": "/api/v1/matches/12/replay"
 }
 ```
 
-`reason`: `defeat, annihilation, timeout, forfeit, disconnect, stalemate`.
+`result` is `win`, `loss` or `draw` (`win`/`loss` follow `winner`).
+`reason`: `annihilation, timeout, forfeit, disconnect, stalemate`.
 `winner` is `null` on a draw.
 
 ---
@@ -342,6 +353,7 @@ appropriate HTTP status.
 | POST | `/matches/:id/leave` | — | `200 { match }` |
 | POST | `/matches/:id/ready` | `{ ready }` | `200 { match }` |
 | POST | `/matches/:id/start` | — | `200 { match }` host only |
+| POST | `/matches/:id/forfeit` | — | `200 { match }` the caller's seat loses, the match ends |
 | GET | `/matches/:id/replay` | — | `200 { header, commands, snapshots_meta, replay_url }` |
 | GET | `/matches/:id/replay.json` | — | `200 application/json` full replay |
 | GET | `/leaderboard` | `?race=&mode=&limit=` | `200 { entries }` |
@@ -361,14 +373,21 @@ a 30-day expiry, stored in the `sessions` table.
   "header": {
     "match_id": 12, "map_id": "altaior", "seed": 987654321, "mode": "melee",
     "started_at": "2026-09-27T10:00:00Z", "duration_ms": 456150, "winner": 8,
+    "command_count": 18422, "truncated": false,
     "players": [ { "player_id": 7, "name": "nik", "race": "terran", "team": 1,
-                   "result": "defeat" } ]
+                   "result": "loss" } ]
   },
   "commands": [ { "tick": 0, "player_id": 7, "index": 0, "c": "move",
                   "ids": [101], "x": 40.5, "z": 12.25, "queue": false } ],
   "final_state": { "entities": [ Entity... ] }
 }
 ```
+
+The header also carries `command_count` (how many commands were kept) and
+`truncated` (`true` when the match exceeded the server's per-match recording
+cap of 20 000 commands and the stream stops there). A truncated replay does
+not reproduce `final_state` from its commands; it is labelled rather than
+passed off as a complete one.
 
 A replay is deterministic: feeding `commands` to the shared simulation from
 `header.seed` reproduces `final_state` exactly. `spec/replay_determinism_spec.rb`

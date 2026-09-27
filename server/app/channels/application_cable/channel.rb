@@ -82,5 +82,35 @@ module ApplicationCable
       transmit_error(code, message, fatal: true)
       nil
     end
+
+    # The refusal a client cannot recover from, and the one that must not be
+    # left half-open. `terminate!` deliberately leaves the subscription alive
+    # for `identify` (PROTOCOL.md §1); this is the opposite — the client is
+    # not a participant in what it asked for, so no later message on this
+    # subscription can change that. `reject` deafens the channel to every
+    # later action, and removing the subscription runs `unsubscribed`
+    # straight away, so a client that is turned away leaves nothing behind —
+    # in particular no half-armed game state that a later disconnect could be
+    # misread as "a player of this match left".
+    #
+    # Safe from `subscribed` (before ActionCable has confirmed the
+    # subscription) as well as from any later action: `reject` is a flag
+    # ActionCable reads at confirmation time, and the removal is idempotent.
+    def refuse!(code, message)
+      transmit_error(code, message, fatal: true)
+      return nil if @refused
+
+      @refused = true
+      reject
+      connection.subscriptions.remove_subscription(self)
+      nil
+    end
+
+    # True once this subscription has been refused for good. `unsubscribed`
+    # consults it so a turned-away subscriber is never counted as a departing
+    # player, however often the connection drops afterwards.
+    def refused?
+      @refused == true
+    end
   end
 end
