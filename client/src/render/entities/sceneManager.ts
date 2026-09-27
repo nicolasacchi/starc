@@ -42,6 +42,7 @@ import { PostFXPipeline } from "@render/core/postfx";
 import { RtsCamera } from "@render/core/camera";
 import { buildTerrain, type Terrain } from "@render/terrain/terrainMesh";
 import { SkyDome } from "@render/sky/skyDome";
+import { createClouds, type CloudLayer } from "@render/sky/clouds";
 import { createWaterPlane, type WaterPlane } from "@render/water/waterPlane";
 import { LightingRig } from "@render/lighting/lighting";
 import { ShadowSystem } from "@render/lighting/shadows";
@@ -78,6 +79,9 @@ const MAX_EXTRAPOLATION = 0.35;
 /** Units nearer than this keep their full rig; further ones are batched. */
 const LOD_DISTANCE = 62;
 const LOD_DISTANCE_SQ = LOD_DISTANCE * LOD_DISTANCE;
+
+/** Seconds after the first frame within which the opening shot may be framed. */
+const BASE_FRAME_WINDOW = 3;
 
 /** Wire weapon name → projectile visual. */
 const PROJECTILE_BY_WEAPON: Record<string, ProjectileKind> = {
@@ -157,6 +161,7 @@ export class SceneManager {
   private postfx: PostFXPipeline | null = null;
   private terrainHandle: Terrain | null = null;
   private sky: SkyDome | null = null;
+  private clouds: CloudLayer | null = null;
   private water: WaterPlane | null = null;
   private lighting: LightingRig | null = null;
   private shadows: ShadowSystem | null = null;
@@ -190,6 +195,8 @@ export class SceneManager {
   private readonly worldTo: WorldPoint = { x: 0, y: 0, z: 0 };
   private readonly worldFrom: WorldPoint = { x: 0, y: 0, z: 0 };
   private lastFrameSeconds = 1 / 60;
+  /** True once the opening shot has been placed on the player's own base. */
+  private framed = false;
   private canvasWidth = 0;
   private canvasHeight = 0;
 
@@ -254,6 +261,9 @@ export class SceneManager {
 
     this.terrainHandle = buildTerrain(this.scene, this.map, settings);
     this.sky = new SkyDome(this.scene, this.map, settings);
+    // The clouds share the dome's uniform objects, so the deck is lit by the
+    // exact sun the sky is painting rather than by a second guess at it.
+    this.clouds = createClouds(this.scene, this.map, settings, this.sky);
     this.water = createWaterPlane(this.scene, this.map, settings);
     this.lighting = new LightingRig(this.scene, this.map, settings);
     this.shadows = new ShadowSystem(this.scene, settings);
@@ -321,6 +331,8 @@ export class SceneManager {
     this.water = null;
     this.sky?.dispose();
     this.sky = null;
+    this.clouds?.dispose();
+    this.clouds = null;
     this.terrainHandle?.dispose();
     this.terrainHandle = null;
     this.renderer?.dispose();
@@ -383,6 +395,39 @@ export class SceneManager {
     }
 
     this.rebuildActiveList();
+    this.frameOwnBase(snapshot.entities);
+  }
+
+  /**
+   * One-shot opening framing: puts the camera on the player's own buildings
+   * rather than the middle of the map, so the first frame of a match is the
+   * base, the mineral line and the workers on it. Skipped once the player has
+   * had a chance to move the camera themselves.
+   */
+  private frameOwnBase(entities: readonly ProtocolEntity[]): void {
+    if (this.framed || this.elapsed > BASE_FRAME_WINDOW) return;
+    let x = 0;
+    let z = 0;
+    let count = 0;
+    for (const entity of entities) {
+      if (entity.sel !== 0 || !hasEntityDef(entity.ty) || !isBuilding(entity.ty)) continue;
+      x += entity.x;
+      z += entity.z;
+      count++;
+    }
+    if (count === 0) return;
+    this.framed = true;
+    this.camera.focus(x / count, z / count, 0);
+  }
+
+  /**
+   * Moves the clock. Past 1 the sun has set and the rig runs its night arc, so
+   * the sky, the key light and the fog all cross into night together. The
+   * clouds read the sky's own uniforms, so they follow without being told.
+   */
+  setTimeOfDay(timeOfDay: number): void {
+    this.sky?.setTimeOfDay(timeOfDay);
+    this.lighting?.setTimeOfDay(timeOfDay);
   }
 
   /** Emits a move order for the given entities. */
@@ -516,6 +561,7 @@ export class SceneManager {
     this.batch?.end();
 
     this.sky?.update(this.elapsed);
+    this.clouds?.update(this.elapsed, this.perspective.position);
     this.water?.update(this.elapsed, this.perspective.position);
     this.lighting?.update(this.elapsed);
     this.shadows?.update(this.perspective, this.terrain);

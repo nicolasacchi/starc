@@ -23,11 +23,14 @@ import type { QualitySettings } from "./quality";
  * on the ground. The RTS camera is ~70 m up, so the *nearest* ground in frame
  * is already 40–90 m away and the far field runs past 400 m; at the authored
  * 0.012 the extinction is 50% at 58 m and 99.9% at 200 m, which fogs the whole
- * playfield into a flat wash of fog colour and hides the horizon. Scaled by
- * this factor grassland sits at half-fog around 210 m and is opaque by ~500 m,
- * which is where the clipmap's cover radius puts its outer edge.
+ * playfield into a flat wash of fog colour and hides the horizon.
+ *
+ * Grassland then wants half extinction near 300 m and ~90% past 560 m, which
+ * is just beyond where the clipmap's cover radius puts its outer edge: the far
+ * field dissolves into the haze instead of ending at a visible rim, and the
+ * mid-field keeps the landforms the haze is supposed to sit behind.
  */
-export const FOG_DENSITY_SCALE = 0.28;
+export const FOG_DENSITY_SCALE = 0.23;
 
 /**
  * Fog colour for a map's time of day: warm and bright at the horizon near the

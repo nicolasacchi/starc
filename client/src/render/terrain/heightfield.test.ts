@@ -23,14 +23,14 @@ const map = (id: string): MapDef => {
 const ALTAIOR_CONFORMANCE: readonly (readonly [number, number, number])[] = [
   [0, 0, 0],
   [1, 1, 0],
-  [128, 128, 1.891704263],
+  [128, 128, 6.878924594],
   [256, 256, 0],
   [255, 255, 0],
-  [64, 192, 1.870294974],
-  [200, 37, 1.581327888],
-  [13, 250, 0.580808929],
-  [77, 91, 1.476525517],
-  [190, 166, 1.558226067],
+  [64, 192, 6.801072633],
+  [200, 37, 5.750283227],
+  [13, 250, 2.112032468],
+  [77, 91, 5.369183698],
+  [190, 166, 5.666276606],
 ];
 
 describe("HeightField", () => {
@@ -64,12 +64,17 @@ describe("HeightField", () => {
 
   it("interpolates bilinearly rather than snapping to the integer grid", () => {
     const field = new HeightField(map("altaior"));
-    // Find a lattice point on a genuine slope.
+    // First lattice point clear of the flat 16 m border with a real gradient
+    // across the next metre. Searching from the corner used to stop on the
+    // border's own ramp, where the next metre is flat and the midpoint is
+    // trivially exact for the wrong reason.
     let x = 0;
     let z = 0;
-    for (let i = 0; i < 256 && field.slope(i, i) < 0.01; i++) {
+    for (let i = 24; i < 256; i++) {
+      if (Math.abs(field.sample(i, i) - field.sample(i + 1, i)) <= 0.01) continue;
       x = i;
       z = i;
+      break;
     }
     const a = field.sample(x, z);
     const b = field.sample(x + 1, z);

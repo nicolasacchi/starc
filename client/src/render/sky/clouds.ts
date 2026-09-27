@@ -71,9 +71,15 @@ float scCloudSheet( vec3 ro, vec3 rd, float altitude, float scale, vec2 wind, ou
   float q = sc_fbm2( p * 0.55, 2, 2.0, 0.5 );
   float d = sc_fbm2( p + vec2( q, q * 0.63 ) * 1.35, CLOUD_OCTAVES, 2.0, 0.55 );
 
-  vec2 sunStep = normalize( uSunDirection.xz + 1e-5 ) * ( 0.42 / max( uSunDirection.y, 0.25 ) );
-  float ds = sc_fbm2( p + sunStep + vec2( q, q * 0.63 ) * 1.35, CLOUD_OCTAVES, 2.0, 0.55 );
-  lit = clamp( 0.5 + ( d - ds ) * 2.4, 0.0, 1.0 );
+  #ifdef CLOUD_SHADOW
+    vec2 sunStep = normalize( uSunDirection.xz + 1e-5 ) * ( 0.42 / max( uSunDirection.y, 0.25 ) );
+    float ds = sc_fbm2( p + sunStep + vec2( q, q * 0.63 ) * 1.35, CLOUD_OCTAVES, 2.0, 0.55 );
+    lit = clamp( 0.5 + ( d - ds ) * 2.4, 0.0, 1.0 );
+  #else
+    // Without the second tap the billows are lit by their own density: tops
+    // bright, undersides dark, which is the same read for a third of the cost.
+    lit = clamp( 0.35 + d * 0.9, 0.0, 1.0 );
+  #endif
 
   float density = d - ( 1.0 - uCoverage );
   // Far sheets lose contrast as they compress towards the horizon.
@@ -88,7 +94,10 @@ void scClouds( vec3 ro, vec3 rd, out vec3 color, out float alpha ) {
   float litMid = 0.5;
   float litLow = 0.5;
   float high = scCloudSheet( ro, rd, CLOUD_CEILING, 0.0007, wind * 1.6, litHigh );
-  float mid = scCloudSheet( ro, rd, CLOUD_CEILING - 90.0, 0.0011, wind, litMid );
+  float mid = 0.0;
+  #if CLOUD_SHEETS >= 2
+    mid = scCloudSheet( ro, rd, CLOUD_CEILING - 90.0, 0.0011, wind, litMid );
+  #endif
   float low = 0.0;
   #if CLOUD_SHEETS >= 3
     low = scCloudSheet( ro, rd, CLOUD_CEILING - 190.0, 0.0016, wind * 0.55, litLow );
@@ -178,9 +187,16 @@ export function createClouds(
   };
 
   const material = new THREE.ShaderMaterial({
+    // The deck is the most expensive thing in the sky by a wide margin: each
+    // sheet is a warped fBm plus a second tap along the sun's ray for the
+    // self-shadow, and the sheets cover a large part of the frame. `postFx` is
+    // the same "can this machine afford a full-screen pass" switch the rest of
+    // the renderer reads, so the low preset gets one unshadowed sheet at two
+    // octaves and still shows a sky with weather in it.
     defines: {
-      CLOUD_SHEETS: settings.terrainLodRings >= 3 ? 3 : 2,
-      CLOUD_OCTAVES: settings.terrainLodRings >= 3 ? 4 : 3,
+      CLOUD_SHEETS: settings.postFx ? (settings.terrainLodRings >= 4 ? 3 : 2) : 1,
+      CLOUD_OCTAVES: settings.postFx ? (settings.terrainLodRings >= 4 ? 4 : 3) : 2,
+      ...(settings.postFx ? { CLOUD_SHADOW: "" } : {}),
     },
     uniforms,
     vertexShader: GLSL_VERTEX,

@@ -384,8 +384,9 @@ uniform sampler2D uField;
 uniform float uFieldSpan;      // (map.size + 1)
 uniform float uCell0;          // finest clipmap cell, metres
 uniform float uRingCount;      // how many clipmap rings exist
-uniform float uLevelHalf;      // clipmap level half extent in finest cells
+uniform float uLevelHalf;      // clipmap level-0 half extent in finest cells
 uniform float uWaterLevel;
+uniform float uRelief;         // map's height range, metres
 uniform float uSnowLine;
 uniform float uSnowAmount;
 uniform float uAoStrength;
@@ -453,7 +454,7 @@ void scClipmap( vec3 pos ) {
   float morph = aLevel < uRingCount
     ? smoothstep( 0.66, 1.0, max( abs( local.x ), abs( local.y ) ) / halfExtent )
     : 0.0;
-  // In units of this level's own cell, `p` indexes its grid. `p / 2` is the
+  // In units of this level's own cell, p indexes its grid. p / 2 is the
   // parent cell that pair of vertices sits in; morphing 1.0 pushes both onto
   // the parent cell's centre vertex, so adjacent pairs collapse into the
   // degenerate triangles CDLOD is built on.
@@ -506,9 +507,9 @@ varying vec3 vTerrWorld;
 varying vec3 vTerrNormal;
 
 // One layer's albedo from a single fetch: R fine detail, G macro mottle,
-// B speckle, A crease occlusion. `detail` is the distance fade — at zero the
-// layer collapses to its flat biome tint, which is what stops the far field
-// from being a grid of texel-sized cells.
+// B speckle, A crease occlusion. The detail argument is the distance fade — at
+// zero the layer collapses to its flat biome tint, which is what stops the far
+// field from being a grid of texel-sized cells.
 vec3 scLayerAlbedo( vec4 t, vec3 tint, float detail ) {
   float d = t.r * 2.0;
   float mottle = 0.76 + 0.48 * t.g;
@@ -535,44 +536,63 @@ float scDetail = 1.0 - smoothstep( uDetailNear, uDetailFar, scCamDist );
 float scMaskFade = 1.0 - smoothstep( uMaskNear, uMaskFar, scCamDist );
 float scBias = ( 1.0 - scDetail ) * 1.6;
 
+// --- breaking the lattice -------------------------------------------------
+// A slow domain warp and a slow per-region tile scale. Both are multiplied by
+// the detail fade, so at range the lookup goes back to being exactly linear in
+// world XZ: the implicit derivatives the mip chain relies on stay coherent
+// and the far field is carried by the splat and the grade instead. One octave
+// each is deliberate: both are 70-380 m features, so a second octave would
+// cost eight hash calls a pixel to add nothing the eye can name.
+float scWarpX = sc_vnoise2( scW * 0.0135 );
+float scWarpZ = sc_vnoise2( scW * 0.0135 + vec2( 37.1, 11.7 ) );
+float scWarp = 21.0 * scDetail;
+vec2 scTex = scW + ( vec2( scWarpX, scWarpZ ) - 0.5 ) * scWarp;
+float scTileScale = mix( 1.0, 0.55 + 1.15 * sc_vnoise2( scW * 0.0072 ), scDetail );
+scTex *= scTileScale;
+
 float scMacro = scField.b;
 float scFine = sc_fbm2( scW * 0.21, 3, 2.0, 0.5 );
 float scMask = clamp( mix( 0.5, scMacro * 0.72 + scFine * 0.28, scMaskFade ), 0.0, 1.0 );
 
-vec2 scUvRock = scW / ${LAYER_TILE_METRES[0]}.0;
-vec2 scUvGrass = scW / ${LAYER_TILE_METRES[1]}.0;
-vec2 scUvDirt = scW / ${LAYER_TILE_METRES[2]}.0;
-vec2 scUvSnow = scW / ${LAYER_TILE_METRES[3]}.0;
+vec2 scUvRock = scTex / ${LAYER_TILE_METRES[0]}.0;
+vec2 scUvGrass = scTex / ${LAYER_TILE_METRES[1]}.0;
+vec2 scUvDirt = scTex / ${LAYER_TILE_METRES[2]}.0;
+vec2 scUvSnow = scTex / ${LAYER_TILE_METRES[3]}.0;
 vec4 scRock = texture2D( uRockMap, scUvRock, scBias );
 vec4 scGrass = texture2D( uGrassMap, scUvGrass, scBias );
 vec4 scDirt = texture2D( uDirtMap, scUvDirt, scBias );
 vec4 scSnow = texture2D( uSnowMap, scUvSnow, scBias );
 
 // --- splat weights: slope drives rock, height drives snow and the beach ---
+// The beach band is a fraction of the map's own relief rather than a fixed
+// number of metres, so raising a map's elevation does not turn half of it
+// into shoreline.
 float scSlope = scField.a + ( scMask - 0.5 ) * 0.30;
-float scRockW = smoothstep( 0.16, 0.44, scSlope );
+float scRockW = smoothstep( 0.34, 0.72, scSlope );
 float scSnowW = uSnowAmount
   * smoothstep( uSnowLine - 1.0, uSnowLine + 2.2, scH + ( scMask - 0.5 ) * 2.2 )
-  * ( 1.0 - smoothstep( 0.20, 0.46, scSlope ) );
-float scDirtW = smoothstep( 2.4, 0.08, scH + ( scMask - 0.5 ) * 1.7 ) * ( 0.5 + 0.5 * scMask );
+  * ( 1.0 - smoothstep( 0.34, 0.72, scSlope ) );
+float scShore = uWaterLevel + uRelief * 0.11;
+float scDirtW = smoothstep( scShore, uWaterLevel + uRelief * 0.004, scH + ( scMask - 0.5 ) * uRelief * 0.05 ) * ( 0.5 + 0.5 * scMask );
 float scGrassW = 0.5 + 0.5 * scMask;
 vec4 scW4 = vec4( scRockW, scGrassW, scDirtW, scSnowW );
 scW4 *= scW4;                      // crisper transitions
 scW4 /= max( scW4.x + scW4.y + scW4.z + scW4.w, 1e-4 );
 
 vec3 scAlbedo =
-    scLayerAlbedo( scRock, uTintRock ) * scW4.x
-  + scLayerAlbedo( scGrass, uTintGrass ) * scW4.y
-  + scLayerAlbedo( scDirt, uTintDirt ) * scW4.z
-  + scLayerAlbedo( scSnow, uTintSnow ) * scW4.w;
+    scLayerAlbedo( scRock, uTintRock, scDetail ) * scW4.x
+  + scLayerAlbedo( scGrass, uTintGrass, scDetail ) * scW4.y
+  + scLayerAlbedo( scDirt, uTintDirt, scDetail ) * scW4.z
+  + scLayerAlbedo( scSnow, uTintSnow, scDetail ) * scW4.w;
 
-// Macro colour grade: slow patches of tinted light, one hue per biome.
-float scGradeN = sc_vnoise2( scW * 0.0075 );
+// Macro colour grade: slow patches of tinted light, one hue per biome. Two
+// incommensurate frequencies, so the patches do not themselves read as a grid.
+float scGradeN = sc_vnoise2( scW * 0.0075 ) * 0.6 + sc_vnoise2( scW * 0.0026 ) * 0.4;
 scAlbedo *= mix( vec3( 1.0 ), uGrade, uGradeAmount * ( 0.35 + 0.65 * scGradeN ) );
 
-// Curvature ambient occlusion — valleys and creases darken, ridges stay open.
-float scAo = 1.0 - clamp( scField.g * uAoStrength, 0.0, 0.8 );
-scAo *= 1.0 - 0.18 * smoothstep( 0.35, 0.8, scField.a );
+// Concavity ambient occlusion — valleys and creases darken, ridges stay open.
+float scAo = 1.0 - clamp( max( scField.g, 0.0 ) * uAoStrength, 0.0, 0.72 );
+scAo *= 1.0 - 0.22 * smoothstep( 0.35, 0.85, scField.a );
 scAlbedo *= scAo;
 
 // Shoreline: below the water line plus a hand's width the ground is wet —
@@ -609,13 +629,20 @@ const GLSL_NORMAL_MAPS = /* glsl */ `
   #endif
 
   if ( scDetail > 0.01 ) {
-    // Micro relief: the gradient of a two-octave fBm. This is the piece that
-    // makes the ground read as ground when the camera is right on top of it.
-    float scE = 0.45;
-    float scD0 = sc_fbm2( scW * 0.9, 2, 2.0, 0.5 );
-    float scDx = sc_fbm2( ( scW + vec2( scE, 0.0 ) ) * 0.9, 2, 2.0, 0.5 ) - scD0;
-    float scDz = sc_fbm2( ( scW + vec2( 0.0, scE ) ) * 0.9, 2, 2.0, 0.5 ) - scD0;
-    scP += vec2( -scDx, -scDz ) * ( 5.0 * scDetail );
+    // Micro relief: the gradient of a two-octave fBm, in a frame rotated 31°
+    // off the world axes. A single value-noise octave on the world lattice
+    // puts a cell boundary every 1.1 m in both directions, and that grid — not
+    // the textures, not the geometry — is what made the ground look paved. A
+    // slowly varying amplitude keeps the near field from being uniformly bumpy
+    // everywhere at once.
+    const mat2 scRot = mat2( 0.8572, -0.5150, 0.5150, 0.8572 );
+    float scAmp = 0.45 + 1.25 * sc_vnoise2( scW * 0.026 );
+    vec2 scP0 = scRot * scW * 0.62;
+    float scE = 0.5 / 0.62;
+    float scD0 = sc_fbm2( scP0, 2, 2.0, 0.5 );
+    float scDx = sc_fbm2( scP0 + vec2( scE, 0.0 ), 2, 2.0, 0.5 ) - scD0;
+    float scDz = sc_fbm2( scP0 + vec2( 0.0, scE ), 2, 2.0, 0.5 ) - scD0;
+    scP += vec2( -scDx, -scDz ) * ( 4.0 * scAmp * scDetail );
   }
 
   // The splat mask is itself a height field, so its gradient is a real bump —
@@ -663,9 +690,12 @@ export function createTerrainMaterial(
 
   const field = heightField(map);
   let maxHeight = 0;
+  let minHeight = Number.POSITIVE_INFINITY;
   for (let i = 0; i < field.grid.length; i++) {
     if (field.grid[i] > maxHeight) maxHeight = field.grid[i];
+    if (field.grid[i] < minHeight) minHeight = field.grid[i];
   }
+  const relief = Math.max(maxHeight - minHeight, 0.5);
 
   const useLayerNormals = settings.anisotropy > 1;
   const texSize = settings.anisotropy >= 8 ? 256 : 128;
@@ -692,8 +722,11 @@ export function createTerrainMaterial(
     uFieldSpan: { value: map.size + 1 },
     uCell0: { value: cell0 },
     uRingCount: { value: ringCount },
-    uLevelHalf: { value: levelCells * 0.5 },
+    // Every level is a `2n`-cell grid, so level 0's half extent is `n` cells —
+    // not `n / 2`, which had the outer bands morphing against the wrong edge.
+    uLevelHalf: { value: levelCells },
     uWaterLevel: { value: TERRAIN_WATER_LEVEL },
+    uRelief: { value: relief },
     uSnowLine: { value: maxHeight * 0.62 },
     uSnowAmount: { value: palette.snowAmount },
     uAoStrength: { value: palette.aoStrength },

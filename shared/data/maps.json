@@ -7,7 +7,7 @@
       "max_players": 8,
       "terrain_seed": 1337,
       "water": false,
-      "elevation": 0.55,
+      "elevation": 2.0,
       "biome": "grassland",
       "description": "Rolling green hills. Open lanes, few chokepoints. The neutral map.",
       "start_positions": [
@@ -150,7 +150,7 @@
         }
       ],
       "lighting": {
-        "time_of_day": 0.35,
+        "time_of_day": 0.23,
         "sun_color": "#fff2d0",
         "fog_density": 0.012
       }
@@ -356,7 +356,7 @@
         }
       ],
       "lighting": {
-        "time_of_day": 0.05,
+        "time_of_day": 0.13,
         "sun_color": "#ff8860",
         "fog_density": 0.03
       }

@@ -5,12 +5,15 @@
  * PROVENANCE OF ASSETS: none. The dome is a `SphereGeometry` and the shader in
  * skyMaterial.ts is pure maths; there is no cubemap, no HDR and no PNG.
  *
- * `time_of_day` is 0 at midnight and 0.5 at noon, which is the convention
- * `core/scene.ts` already uses for the fog colour. The sun therefore rises in
- * the east (+X) at t = 0.25, is overhead at t = 0.5 and sets in the west at
- * t = 0.75, travelling along a great circle tilted 24 degrees off the vertical
- * so it does not pass exactly through the zenith — the same reason real sun
- * paths are not straight overhead except at the tropics.
+ * The sun here is NOT this module's own model. It is `sunStateFor` — the same
+ * function the key light in `lighting/lighting.ts` is driven from, so the disc
+ * painted in the sky, the direction the shadows fall in and the colour the
+ * fog fades to can never disagree. That model reads `time_of_day` as 0 at
+ * sunrise, 0.5 at noon and 1 at sunset, and keeps going past 1 into the night
+ * arc, so a clock reading past sunset is night on the ground and in the sky
+ * at the same time. A second, independent sun model is exactly what this
+ * replaces: the dome used to put the sun below the horizon for a map whose
+ * key light was still 30 degrees up, and every horizon read wrong.
  *
  * The dome is drawn as a direction field rather than a position: the vertex
  * shader uses the sphere's LOCAL position as the view direction, which makes
@@ -23,46 +26,39 @@
 import * as THREE from "three";
 import type { MapDef } from "@shared/protocol";
 import type { QualitySettings } from "@render/core/quality";
+import { createSunState, sunStateFor } from "@render/lighting/lighting";
 import {
   createSkyMaterial,
-  sunDiscIntensity,
-  sunTransmittance,
   type SkyMaterialHandle,
   type SkyUniforms,
 } from "@render/sky/skyMaterial";
-
-/** Degrees the sun's arc is tilted off the vertical, radians. */
-const SUN_ARC_TILT = 0.42;
 
 /** Radius in metres. Must exceed the map's half-diagonal by a wide margin. */
 const DOME_RADIUS = 800;
 
 /** How hazy each biome's air is. Badlands is a dust storm; the isle is clear. */
 const TURBIDITY: Record<string, number> = {
-  grassland: 2.8,
-  rocky: 3.4,
-  badlands: 6.5,
+  grassland: 2.6,
+  rocky: 2.4,
+  badlands: 4.2,
   island: 2.0,
 };
 
 const MOON_TINT = new THREE.Color(0.62, 0.72, 1.0);
 
-/** Sun direction for a time of day, midnight at 0, noon at 0.5. */
-export function sunDirectionFor(timeOfDay: number, out = new THREE.Vector3()): THREE.Vector3 {
-  const theta = (timeOfDay - 0.25) * Math.PI * 2;
-  const horizontal = Math.cos(theta);
-  return out
-    .set(
-      horizontal * Math.cos(SUN_ARC_TILT),
-      Math.sin(theta),
-      horizontal * Math.sin(SUN_ARC_TILT),
-    )
-    .normalize();
-}
+const sunState = createSunState();
+const moonState = createSunState();
+const mapTint = new THREE.Color();
+const groundTint = new THREE.Color().setHex(0x3c3c34, THREE.SRGBColorSpace);
 
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  const t = THREE.MathUtils.clamp((x - edge0) / (edge1 - edge0), 0, 1);
-  return t * t * (3 - 2 * t);
+/**
+ * Sun direction for a time of day, straight from the rig's model: 0 is
+ * sunrise, 0.5 is noon, 1 is sunset, and anything past 1 continues into the
+ * night arc with the moon up instead.
+ */
+export function sunDirectionFor(timeOfDay: number, out = new THREE.Vector3()): THREE.Vector3 {
+  sunStateFor(timeOfDay, sunState);
+  return out.copy(sunState.direction);
 }
 
 export class SkyDome {
@@ -79,13 +75,16 @@ export class SkyDome {
   private readonly moonPhase: number;
   private timeOfDay: number;
   private night = 0;
-  private daylight = 1;
+  private intensity = 1;
 
   constructor(scene: THREE.Scene, map: MapDef, settings: QualitySettings) {
     this.turbidity = TURBIDITY[map.biome] ?? 2.8;
-    this.timeOfDay = THREE.MathUtils.clamp(map.lighting?.time_of_day ?? 0.5, 0, 1);
+    // Not clamped: past 1 the rig's model continues into the night arc, which
+    // is how a map or a scripted clock reaches midnight.
+    this.timeOfDay = map.lighting?.time_of_day ?? 0.5;
     // A gibbous moon, different on every map but stable for the match.
     this.moonPhase = 0.55 + 0.42 * Math.abs(Math.sin((map.terrain_seed ?? 1) * 0.0173));
+    mapTint.setStyle(map.lighting?.sun_color ?? "#ffffff", THREE.SRGBColorSpace);
 
     this.handle = createSkyMaterial({
       turbidity: this.turbidity,
@@ -120,10 +119,10 @@ export class SkyDome {
   }
 
   /**
-   * The key light's colour: the map's own sun hue, pushed through the same
-   * atmospheric extinction the sky shader uses, dimmed towards the horizon and
-   * handed over to moonlight at night. It carries the hue and a gentle dimming
-   * only — the brightness that goes with it is `sunIntensity()`.
+   * The key light's colour, straight from the rig's sun model: blackbody at
+   * this sun's elevation, pulled towards the map's own hue, handed over to
+   * moonlight once the sun is down. It carries the hue only — the brightness
+   * that goes with it is `sunIntensity()`.
    */
   sunColor(): THREE.Color {
     return this.sunLight;
@@ -134,7 +133,7 @@ export class SkyDome {
    * the moon takes over at a few percent). Pair with `sunColor()`.
    */
   sunIntensity(): number {
-    return Math.max(this.daylight * sunDiscIntensity(this.sunDir.y), this.night * 0.05);
+    return this.intensity;
   }
 
   /** 0 by day, 1 at night. Also cross-fades the star field and airglow. */
@@ -142,14 +141,17 @@ export class SkyDome {
     return this.night;
   }
 
-  /** 0..1 through the day. Anything but 0.5 is a sunrise or a sunset. */
+  /** Through the day: 0 sunrise, 0.5 noon, 1 sunset, 1.5 midnight. */
   timeOfDayValue(): number {
     return this.timeOfDay;
   }
 
-  /** Re-derives the sun, moon, colours and night blend from the time of day. */
+  /**
+   * Re-derives the sun, moon, colours and night blend from the time of day.
+   * Values are not wrapped: past 1 the clock is in the night arc.
+   */
   setTimeOfDay(timeOfDay: number): void {
-    this.timeOfDay = ((timeOfDay % 1) + 1) % 1;
+    this.timeOfDay = timeOfDay;
     this.refresh();
   }
 
@@ -172,18 +174,18 @@ export class SkyDome {
   }
 
   private refresh(): void {
-    sunDirectionFor(this.timeOfDay, this.sunDir);
+    // One model, three consumers: the disc painted here, the key light in
+    // lighting.ts and the fog colour all read this same evaluation.
+    sunStateFor(this.timeOfDay, sunState, mapTint, groundTint);
+    this.sunDir.copy(sunState.direction);
+    this.night = sunState.night;
+    this.intensity = Math.max(sunState.intensity, this.night * 0.05);
+
     // A full moon is exactly anti-solar; a thinner one lags by its phase.
-    sunDirectionFor(this.timeOfDay + this.moonPhase * 0.5, this.moonDir);
+    sunStateFor(this.timeOfDay + 0.5 + (this.moonPhase - 0.5) * 0.2, moonState, mapTint, groundTint);
+    this.moonDir.copy(moonState.direction);
 
-    const elevation = this.sunDir.y;
-    this.night = smoothstep(0.06, -0.12, elevation);
-    this.daylight = smoothstep(-0.04, 0.20, elevation);
-
-    sunTransmittance(elevation, this.turbidity, this.sunLight).multiply(this.sunHue);
-    // Keep a floor so the disc never turns black just before it sets, then
-    // hand the light over to the moon once the sky does.
-    this.sunLight.multiplyScalar(0.25 + 0.75 * this.daylight);
+    this.sunLight.copy(sunState.color);
     this.sunLight.lerp(MOON_TINT, this.night * 0.85);
 
     this.uniforms.uSunDirection.value.copy(this.sunDir);
