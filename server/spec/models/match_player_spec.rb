@@ -4,6 +4,12 @@ require "rails_helper"
 
 RSpec.describe MatchPlayer do
   let(:match) { create(:match, max_players: 8) }
+  # Reads the column straight out of SQLite so the assertion is about what was
+  # actually stored, not about ActiveRecord's enum casting.
+  def stored_result(seat)
+    ActiveRecord::Base.connection.select_value("SELECT result FROM match_players WHERE id = #{seat.id}")
+  end
+
 
   describe "race" do
     it "accepts every race in the shared roster" do
@@ -82,8 +88,8 @@ RSpec.describe MatchPlayer do
       }.each do |name, value|
         seat = create(:match_player, match: match, player: create(:player), slot: value, result: name)
         expect(seat.reload.result).to eq(name.to_s)
-        expect(seat).to be_public_send("#{name}?")
-        expect(MatchPlayer.where(id: seat.id).pick(:result)).to eq(value)
+        expect(seat.public_send("#{name}?")).to be(true)
+        expect(stored_result(seat)).to eq(value)
       end
     end
 

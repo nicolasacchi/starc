@@ -136,9 +136,9 @@ module Starc
         # PROTOCOL.md §4 constrains coordinates to the world box.
         def self.destination(world, cmd, index, result)
           x = value(cmd, "x")
-          z = value(cmd, "y")
+          z = value(cmd, "z")
           unless numeric?(x) && numeric?(z)
-            result.reject!(index, "invalid_payload", "x and y must be numbers")
+            result.reject!(index, "invalid_payload", "x and z must be numbers")
             return nil
           end
           unless world.terrain.in_bounds?(x, z)
@@ -183,7 +183,7 @@ module Starc
           units = resolve_ids(world, player_id, cmd, index, result) or next result
           dest = destination(world, cmd, index, result) or next result
           x, z = dest
-          order = { "order" => ORDER_MOVE, "x" => x, "y" => z }
+          order = { "order" => ORDER_MOVE, "x" => x, "z" => z }
           units.each do |u|
             next unless u.unit?
 
@@ -268,13 +268,13 @@ module Starc
           units = resolve_ids(world, player_id, cmd, index, result) or next result
           dest = destination(world, cmd, index, result) or next result
           x2 = value(cmd, "x2")
-          z2 = value(cmd, "y2")
+          z2 = value(cmd, "z2")
           unless numeric?(x2) && numeric?(z2) && world.terrain.in_bounds?(x2, z2)
             result.reject!(index, "out_of_range", "patrol end is outside the map")
             next result
           end
           x, z = dest
-          order = { "order" => ORDER_PATROL, "x" => x, "y" => z,
+          order = { "order" => ORDER_PATROL, "x" => x, "z" => z,
                     "x2" => x2.to_f, "y2" => z2.to_f }
           units.each do |u|
             next unless u.unit?
@@ -391,12 +391,18 @@ module Starc
 
           world.spend(player_id, (cost["minerals"] || 0).to_i, (cost["vespene"] || 0).to_i)
           building = world.spawn_entity(unit_type, player_id, x, z, build_progress: 0.0, state: "building")
+          # A worker that was mining keeps its harvest order and goes back to
+          # it when the building is up; anyone else simply stops where they
+          # are. Either way the construction site is what it walks to, because
+          # `construct_id` outranks the order in the movement phase.
+          resuming_harvest = worker.order == ORDER_HARVEST
           worker.construct_id = building.id
           worker.order_queue.clear
-          worker.order = ORDER_NONE
+          worker.order = resuming_harvest ? ORDER_HARVEST : ORDER_NONE
           worker.target_id = 0
-          worker.harvest_phase = :none
           worker.state = "building"
+          worker.hold_position = false
+          worker.harvest_phase = :to_node if resuming_harvest
           result.accept!
         end
 

@@ -13,7 +13,7 @@
  * atlas is generated in JavaScript, so no image is loaded.
  */
 import * as THREE from "three";
-import type { MapDef } from "@shared/protocol";
+import type { MapDef, Race } from "@shared/protocol";
 import type { QualitySettings } from "@render/core/quality";
 import { heightField, type HeightField } from "@render/terrain/heightfield";
 
@@ -216,6 +216,8 @@ function gridTexture(size: number, anisotropy: number): THREE.DataTexture {
 
 const TINTS: Readonly<Record<DecalKind, number>> = { scorch: 0xffffff, blood: 0xd8b0b0 };
 const ATLAS_OFFSET: Readonly<Record<DecalKind, number>> = { scorch: 0.5, blood: 0 };
+/** Zerg ichor, for `splatter`. */
+const ICHOR_TINT = 0x9fd05a;
 
 /**
  * Pooled ground marks plus the placement grid.
@@ -254,8 +256,8 @@ export class DecalSystem {
   private spawned = 0;
   private time = 0;
 
-  constructor(scene: THREE.Scene, map: MapDef, settings: QualitySettings) {
-    this.terrain = heightField(map);
+  constructor(scene: THREE.Scene, map: MapDef, settings: QualitySettings, terrain?: HeightField) {
+    this.terrain = terrain ?? heightField(map);
     this.capacity = settings.postFx ? 256 : 128;
     this.group.name = "decals";
 
@@ -338,13 +340,21 @@ export class DecalSystem {
   }
 
   /** A charred mark, as left by fire or a collapsing building. */
-  scorch(x: number, z: number, radius: number, yaw = Math.random() * Math.PI): void {
-    this.place("scorch", x, z, radius, yaw);
+  scorch(position: THREE.Vector3, radius: number, yaw = Math.random() * Math.PI): void {
+    this.place("scorch", position.x, position.z, radius, yaw);
   }
 
-  /** Blood, as left by a zerg thing losing a limb. */
-  blood(x: number, z: number, radius: number, yaw = Math.random() * Math.PI): void {
-    this.place("blood", x, z, radius, yaw);
+  /**
+   * Blood and ichor. Zerg ichor is green and thicker than the red the other
+   * two races leave behind, so the race picks the tint.
+   */
+  splatter(
+    position: THREE.Vector3,
+    radius: number,
+    kind: DecalKind | Race,
+    yaw = Math.random() * Math.PI,
+  ): void {
+    this.place("blood", position.x, position.z, radius, yaw, kind === "zerg");
   }
 
   /**
@@ -372,6 +382,9 @@ export class DecalSystem {
     const count = this.dirtyHi - first + 1;
     for (const attribute of this.buffers) {
       attribute.addUpdateRange(first * attribute.itemSize, count * attribute.itemSize);
+      // addUpdateRange only records the span; needsUpdate is what makes the
+      // renderer upload it.
+      attribute.needsUpdate = true;
     }
     this.dirtyLo = Number.POSITIVE_INFINITY;
     this.dirtyHi = -1;
@@ -387,7 +400,7 @@ export class DecalSystem {
     this.gridMap.dispose();
   }
 
-  private place(kind: DecalKind, x: number, z: number, radius: number, yaw: number): void {
+  private place(kind: DecalKind, x: number, z: number, radius: number, yaw: number, ichor = false): void {
     if (!(radius > 0)) return;
     const index = this.head;
     this.head = index + 1 === this.capacity ? 0 : index + 1;
@@ -425,7 +438,7 @@ export class DecalSystem {
     this.params[i4 + 1] = DECAL_LIFE;
     this.params[i4 + 2] = ATLAS_OFFSET[kind];
 
-    const tint = TINTS[kind];
+    const tint = ichor ? ICHOR_TINT : TINTS[kind];
     this.tints[i3] = ((tint >> 16) & 0xff) / 255;
     this.tints[i3 + 1] = ((tint >> 8) & 0xff) / 255;
     this.tints[i3 + 2] = (tint & 0xff) / 255;

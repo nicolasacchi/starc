@@ -32,8 +32,8 @@ export const SKY_RAYLEIGH = new THREE.Vector3(5.804542996261093e-6, 1.3562911419
 /** Mie scattering constants, from the Preetham/Hosek fit. */
 export const SKY_MIE_CONST = new THREE.Vector3(1.8399918514433978e14, 2.7798023919666528e14, 4.0790479543861094e14);
 
-const RAYLEIGH_SCALE_HEIGHT = 8000;
-const MIE_SCALE_HEIGHT = 1200;
+const RAYLEIGH_SCALE_HEIGHT = 8400;
+const MIE_SCALE_HEIGHT = 1250;
 const MIE_TURBIDITY_SCALE = 1e-18;
 const MIE_TURBIDITY_COEFF = 0.434;
 
@@ -55,7 +55,6 @@ export function airMass(cosZenith: number): number {
 }
 
 const scratchMie = new THREE.Vector3();
-const scratchBeta = new THREE.Vector3();
 
 /**
  * How much sunlight survives the trip to the ground at this sun elevation,
@@ -109,15 +108,38 @@ export interface SkyUniforms {
   uTime: THREE.IUniform;
 }
 
+/**
+ * Anything that knows where the sun is. `SkyDome` implements it, and the water
+ * and cloud shaders take one so they light themselves from the same sun the
+ * sky is painting — no second source of truth, and no wiring if there is none.
+ */
+export interface SunSource {
+  sunDirection(): THREE.Vector3;
+  sunColor(): THREE.Color;
+}
+
+/**
+ * A `SkyDome`, or anything else that also hands over its uniform objects.
+ * Passing one of these is what makes the water and the clouds reflect and
+ * light themselves from the exact sky being painted rather than a copy of it.
+ */
+export interface SkySource extends SunSource {
+  uniforms: SkyUniforms;
+}
+
 export function createSkyUniforms(): SkyUniforms {
   return {
     uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
-    uTurbidity: { value: 3.4 },
+    uTurbidity: { value: 2.6 },
     uMieCoefficient: { value: 0.005 },
     uMieDirectionalG: { value: 0.8 },
-    uRayleigh: { value: SKY_RAYLEIGH.clone().multiplyScalar(1.6) },
-    uSunIntensity: { value: 900 },
-    uSkyLuminance: { value: 1 },
+    uRayleigh: { value: SKY_RAYLEIGH.clone() },
+    // EE, the Preetham solar constant; scSunDiscIntensity returns the 0..1
+    // fraction of it that is above the horizon.
+    uSunIntensity: { value: 1000 },
+    // The exposure the Preetham radiance is displayed at; 0.04 puts a noon
+    // zenith at roughly 0.35 before tone mapping.
+    uSkyLuminance: { value: 0.04 },
     uSunDiscColor: { value: new THREE.Color(1, 1, 1) },
     uNight: { value: 0 },
     uMoonDirection: { value: new THREE.Vector3(0, -1, 0) },
@@ -144,10 +166,14 @@ uniform float uNight;            // 0 by day, 1 at night
 uniform vec3 uMoonDirection;
 uniform float uMoonPhase;        // 0 new .. 1 full
 uniform float uStarIntensity;
-uniform float uTime;
 
 const float SKY_PI = 3.141592653589793;
-const vec3 SKY_MIE_CONST = vec3( 1.8399918514433978E14, 2.7798023919666528E14, 4.0790479543861094E14 );
+const vec3 SKY_MIE_CONST = vec3( 1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14 );
+
+// `uTime` is deliberately NOT declared here: the water and the cloud shader
+// both include this block and declare their own clock, and a second
+// declaration of the same uniform in one shader is a compile error. They all
+// read the same uniform object, so one clock still drives all three.
 `;
 
 /** Rayleigh + Mie scattering and the sun disc. Reused verbatim by the water. */
@@ -182,46 +208,65 @@ float scSunExtinction( float cosSunZenith ) {
   return max( 0.0, 1.0 - exp( -( ( cutoff - acos( clamp( cosSunZenith, -1.0, 1.0 ) ) ) / steepness ) ) );
 }
 
-/** In-scattered radiance along `dir`, in the same units as the sun intensity. */
+/**
+ * In-scattered radiance along `dir`, in the same units as `uSunIntensity`.
+ *
+ * `sR`/`sM` are path LENGTHS through the atmosphere (scale height times air
+ * mass), not optical depths: the optical depth is beta * length, and getting
+ * that order wrong squares a number around 1e-5 and renders the sky black.
+ */
 vec3 scSkyRadiance( vec3 dir ) {
   vec3 betaR = uRayleigh;
   vec3 betaM = scTotalMie( uTurbidity ) * uMieCoefficient;
   float m = scAirMass( dir.y );
-  vec3 sR = betaR * ${RAYLEIGH_SCALE_HEIGHT.toFixed(1)} * m;
-  vec3 sM = betaM * ${MIE_SCALE_HEIGHT.toFixed(1)} * m;
+  float sR = ${RAYLEIGH_SCALE_HEIGHT.toFixed(1)} * m;
+  float sM = ${MIE_SCALE_HEIGHT.toFixed(1)} * m;
   vec3 Fex = exp( -( betaR * sR + betaM * sM ) );
 
   float cosSun = dot( dir, uSunDirection );
-  vec3 ratio = ( betaR * scRayleighPhase( cosSun ) + betaM * scHenyeyGreenstein( cosSun, uMieDirectionalG ) )
-    / ( betaR + betaM );
+  // Preetham remaps the Rayleigh lobe to the half angle; without it the
+  // forward scatter blows out around the sun and the sky goes white.
+  float rPhase = scRayleighPhase( cosSun * 0.5 + 0.5 );
+  vec3 ratio = ( betaR * rPhase + betaM * scHenyeyGreenstein( cosSun, uMieDirectionalG ) ) / ( betaR + betaM );
   float sunE = scSunExtinction( uSunDirection.y ) * uSunIntensity;
 
   vec3 lin = pow( max( sunE * ratio * ( 1.0 - Fex ), 0.0 ), vec3( 1.5 ) );
   // Looking towards the sun the in-scattered term is replaced by the
   // forward-scattered one; that is what makes the aureole around the sun.
   float sunFade = clamp( pow( 1.0 - uSunDirection.y, 5.0 ), 0.0, 1.0 );
-  lin *= mix( vec3( 1.0 ), pow( max( sunE * ratio * Fex, 0.0 ), vec3( 1.5 ) ), sunFade );
-  return lin * uSkyLuminance;
+  lin *= mix( vec3( 1.0 ), pow( max( sunE * ratio * Fex, 0.0 ), vec3( 0.5 ) ), sunFade );
+
+  // A little uniform multiple scattering so the sky is not black at the
+  // horizon and the shadows are not lit by nothing.
+  vec3 l0 = 0.1 * Fex;
+  return ( lin + l0 ) * uSkyLuminance;
 }
 
-/** The sun's disc with a real limb-darkening law, plus its aureole. */
+/**
+ * The sun's disc: the real 0.53 degree angular diameter, the Hestroffer-Magnan
+ * limb-darkening law, and an aureole. `uSunDiscColor` already carries the map's
+ * own sun hue and the extinction along the sun's own path, so the disc reddens
+ * at sunset exactly as fast as the key light does.
+ */
 vec3 scSunDisc( vec3 dir ) {
   float cosSun = dot( dir, uSunDirection );
   float ang = acos( clamp( cosSun, -1.0, 1.0 ) );
-  const float sunRadius = 0.0093;   // ~0.53 degrees
-  float disc = 1.0 - smoothstep( sunRadius * 0.96, sunRadius, ang );
+  const float sunRadius = 0.0093;
+  float disc = 1.0 - smoothstep( sunRadius * 0.97, sunRadius, ang );
   float r = clamp( ang / sunRadius, 0.0, 1.0 );
   float mu = sqrt( max( 0.0, 1.0 - r * r ) );
-  // Hestroffer & Magnan: I(mu)/I(1) = 1 - u(1-mu) - v(1-mu)^2, u=0.93, v=0.23.
   float limb = 1.0 - 0.93 * ( 1.0 - mu ) - 0.23 * ( 1.0 - mu ) * ( 1.0 - mu );
-  float aureole = pow( max( cosSun, 0.0 ), 1400.0 ) * 0.5 + pow( max( cosSun, 0.0 ), 12.0 ) * 0.012;
-  return ( uSunDiscColor * limb * disc * 14.0 + uSunDiscColor * aureole ) * smoothstep( -0.06, 0.02, uSunDirection.y );
+  float sunE = scSunExtinction( uSunDirection.y ) * uSunIntensity;
+  float aureole = pow( max( cosSun, 0.0 ), 1400.0 ) * 0.35 + pow( max( cosSun, 0.0 ), 14.0 ) * 0.008;
+  return uSunDiscColor * ( 760.0 * disc * limb * min( sunE, 80.0 ) + aureole * 20.0 )
+    * smoothstep( -0.05, 0.01, uSunDirection.y );
 }
 `;
 
 const GLSL_SKY_NIGHT = /* glsl */ `
 ${GLSL_HASH}
 ${GLSL_NOISE}
+uniform float uTime;            // declared here, not in GLSL_SKY_DECLS
 
 /** Airglow gradient: deep blue overhead, a shade warmer at the horizon. */
 vec3 scNightSky( vec3 dir ) {
@@ -249,7 +294,7 @@ float scStarLayer( vec3 dir, float scale, float density, float size, out vec3 ti
   float dist = length( fract( p ) - h );
   float bright = 0.25 + 0.75 * fract( h.y * 91.7 );
   tint = mix( vec3( 0.72, 0.80, 1.0 ), vec3( 1.0, 0.86, 0.70 ), fract( h.z * 57.3 ) );
-  return smoothstep( size, 0.0, dist ) * bright;
+  return ( 1.0 - smoothstep( 0.0, size, dist ) ) * bright;
 }
 
 /**
@@ -339,7 +384,7 @@ void main() {
 
   // Below the horizon there is no sky, only the dark side of the world; this
   // keeps the terrain silhouette and the sea horizon reading correctly.
-  float below = smoothstep( 0.0, -0.06, dir.y );
+  float below = 1.0 - smoothstep( -0.06, 0.0, dir.y );
   color = mix( color, color * 0.22, below );
 
   gl_FragColor = vec4( max( color, 0.0 ), 1.0 );

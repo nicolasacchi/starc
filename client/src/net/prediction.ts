@@ -281,7 +281,7 @@ export class MovementPredictor {
         // Keep predicting toward our own, still-unconfirmed destination.
       } else {
         unit.orderKind = entity.ord ?? 0;
-        unit.order = unit.orderKind === 1 ? { x: entity.ox ?? 0, y: entity.oy ?? 0 } : null;
+        unit.order = unit.orderKind === 1 ? { x: entity.ox ?? 0, z: entity.oz ?? 0 } : null;
       }
 
       if (error > this.snapThreshold) {
@@ -417,7 +417,7 @@ export class MovementPredictor {
       orderKind: entity.ord ?? 0,
       stalledTicks: 0,
     };
-    if (unit.orderKind === 1) unit.order = { x: entity.ox ?? 0, y: entity.oy ?? 0 };
+    if (unit.orderKind === 1) unit.order = { x: entity.ox ?? 0, z: entity.oz ?? 0 };
     return unit;
   }
 }

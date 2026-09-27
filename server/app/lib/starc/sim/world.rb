@@ -42,10 +42,15 @@ module Starc
       PROTOCOL_VERSION = 1
       MESSAGE_TYPE = "game:snapshot"
 
+      # End reasons the simulation itself produces. PROTOCOL.md §5 also allows
+      # `defeat` and `disconnect`, which are channel-level outcomes — the
+      # channel reports those, and `forfeit` takes the reason as an argument
+      # for exactly that reason.
       TIMEOUT_REASON = "timeout"
       ANNIHILATION_REASON = "annihilation"
       FORFEIT_REASON = "forfeit"
       STALEMATE_REASON = "stalemate"
+      DISCONNECT_REASON = "disconnect"
 
       # 90 minutes of sim time at 20 Hz.
       MATCH_TIMEOUT_TICKS = 108_000
@@ -55,9 +60,9 @@ module Starc
       # Splash falloff for weapons that declare only a radius.
       DEFAULT_SPLASH_DAMAGE_PCT = 0.5
 
-      # Shields only start recharging once a unit has been out of combat.
+      # Shields only start recharging once a unit has been out of combat
+      # for this long. Not a roster stat — no unit declares a delay.
       SHIELD_REGEN_DELAY_S = 5.0
-      SHIELD_REGEN_INTERVAL_TICKS = 20
 
       # Openings: 4..6 workers, drawn deterministically from the player stream.
       MIN_STARTING_WORKERS = 4
@@ -164,10 +169,6 @@ module Starc
         @finished
       end
 
-      def over?
-        !@finished.nil?
-      end
-
       def timeout?
         @tick >= MATCH_TIMEOUT_TICKS
       end
@@ -221,8 +222,10 @@ module Starc
         @living.each(&block)
       end
 
+      # The roster is fixed for the life of the match, so this is built once
+      # rather than allocating a fresh Array every accounting tick.
       def player_ids
-        @players.map { |p| p[:id] }
+        @player_ids ||= @players.map { |p| p[:id] }.freeze
       end
 
       def player(id)
@@ -235,10 +238,6 @@ module Starc
 
       def state(id)
         @player_state[id]
-      end
-
-      def states
-        @player_state
       end
 
       def allies?(a, b)
@@ -403,6 +402,7 @@ module Starc
         @living << e
         @index.insert(e)
         note_unit_built(player_id) if e.unit?
+        note_building_changed(player_id) if e.is_building
         e
       end
 
@@ -410,7 +410,7 @@ module Starc
         entity.is_air ? Starc::Sim::Terrain::AIR_ALTITUDE : @terrain.height_at(entity.x, entity.z)
       end
 
-      # Flag an entity dead. The death event, kill/death counters and
+      # Flag an entity dead. The death event, kill and death counters and the
       # reference cleanup all happen in phase 9.
       def mark_dead(entity)
         return false if entity.dead
@@ -420,6 +420,7 @@ module Starc
         entity.state = "dead"
         @index.remove(entity.id)
         @pending_deaths << entity
+        note_building_changed(entity.player_id) if entity.is_building
         true
       end
 
@@ -623,6 +624,14 @@ module Starc
         st[:units_built] += 1 if st
       end
 
+      # Bumped whenever a player's set of buildings changes, so per-player
+      # derived data (the harvest drop-off) knows when to recompute itself
+      # instead of rescanning the entity table every tick.
+      def note_building_changed(player_id)
+        st = @player_state[player_id]
+        st[:building_version] += 1 if st
+      end
+
       private
 
       def build_weapon_profile(key, entity)
@@ -696,7 +705,12 @@ module Starc
           units_built: 0,
           army_value: 0,
           alive: true,
-          main_building_id: nil
+          main_building_id: nil,
+          # Bumped whenever this player's set of buildings changes. Derived
+          # per-player data (the harvest drop-off) watches it and rebuilds.
+          building_version: 0,
+          drop_offs: nil,
+          drop_offs_version: -1
         }
       end
 
@@ -705,7 +719,7 @@ module Starc
       def setup_opening!
         @players.each do |p|
           start = @terrain.start_position(p[:slot])
-          hq = spawn_entity(Starc::GameData.starting_building(p[:race]), p[:id], start["x"], start["y"])
+          hq = spawn_entity(Starc::GameData.starting_building(p[:race]), p[:id], start["x"], start["z"])
           @player_state[p[:id]][:main_building_id] = hq&.id
           seed_mineral_field(p[:id], start)
           place_starting_workers(p[:id], Starc::GameData.starting_unit(p[:race]), start)
@@ -724,7 +738,7 @@ module Starc
           offset = STARTING_WORKER_RING + rng.range(0.0, 1.0)
           w = spawn_entity(worker_key, player_id,
                            start["x"] + (Math.cos(angle) * offset),
-                           start["y"] + (Math.sin(angle) * offset))
+                           start["z"] + (Math.sin(angle) * offset))
           next unless w
 
           w.order = Starc::Sim::Entity::ORDER_HARVEST
@@ -743,7 +757,7 @@ module Starc
         best = nil
         best_d = Float::INFINITY
         clusters.each do |c|
-          d = ((c["x"] - start["x"])**2) + ((c["y"] - start["y"])**2)
+          d = ((c["x"] - start["x"])**2) + ((c["z"] - start["z"])**2)
           next if d >= best_d
 
           best_d = d
@@ -758,7 +772,7 @@ module Starc
           angle = Math::PI * 2.0 * rng.next_float
           radius = NODE_RING_RADIUS * rng.next_float
           add_node(best["x"] + (Math.cos(angle) * radius),
-                   best["y"] + (Math.sin(angle) * radius),
+                   best["z"] + (Math.sin(angle) * radius),
                    amount, rich: !!best["rich"])
         end
       end

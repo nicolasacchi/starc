@@ -83,11 +83,12 @@ interface LevelGeometry {
  * central `cells × cells` block removed, which is exactly the extent of the
  * level inside it.
  */
-function buildLevel(level: number, cells: number, cell0: number): LevelGeometry {
+function buildLevel(level: number, cells: number, cell0: number, hollow: boolean): LevelGeometry {
   const cell = cell0 * Math.pow(2, level);
   const verts = cells + 1;
   const hole = cells * 0.25; // central quarter, i.e. the inner level's extent
-  const inHole = (i: number, j: number): boolean => i >= hole && i < hole * 3 && j >= hole && j < hole * 3;
+  const inHole = (i: number, j: number): boolean =>
+    hollow && i >= hole && i < hole * 3 && j >= hole && j < hole * 3;
 
   const used = new Uint8Array(verts * verts);
   let cellCount = 0;
@@ -149,7 +150,7 @@ export function createClipmapGeometry(config: ClipmapConfig): THREE.BufferGeomet
   const n = config.levelCells;
   const levels: LevelGeometry[] = [];
   for (let level = 0; level <= config.ringCount; level++) {
-    levels.push(buildLevel(level, level === 0 ? n : n * 2, config.cell0));
+    levels.push(buildLevel(level, level === 0 ? n : n * 2, config.cell0, level > 0));
   }
 
   let vertexTotal = 0;
@@ -214,16 +215,23 @@ export function buildTerrain(scene: THREE.Scene, map: MapDef, settings: QualityS
   let snapX = Number.NaN;
   let snapZ = Number.NaN;
 
+  // Start centred on the map so the very first frame is already correct,
+  // before the render loop has called update() even once.
+  const recentre = (cameraTargetX: number, cameraTargetZ: number): void => {
+    const x = Math.floor(cameraTargetX / snap) * snap;
+    const z = Math.floor(cameraTargetZ / snap) * snap;
+    if (x === snapX && z === snapZ) return;
+    snapX = x;
+    snapZ = z;
+    mesh.position.set(x, 0, z);
+  };
+  recentre(map.size * 0.5, map.size * 0.5);
+
   return {
     mesh,
     config,
     update(cameraTargetX: number, cameraTargetZ: number): void {
-      const x = Math.floor(cameraTargetX / snap) * snap;
-      const z = Math.floor(cameraTargetZ / snap) * snap;
-      if (x === snapX && z === snapZ) return;
-      snapX = x;
-      snapZ = z;
-      mesh.position.set(x, 0, z);
+      recentre(cameraTargetX, cameraTargetZ);
     },
     dispose(): void {
       scene.remove(mesh);
@@ -288,7 +296,7 @@ function makeHeightFieldRaycast(map: MapDef, mesh: THREE.Mesh): THREE.Mesh["rayc
         hitPoint.set(origin.x + direction.x * h, origin.y + direction.y * h, origin.z + direction.z * h);
         const n = field.normal(hitPoint.x, hitPoint.z);
         hitNormal.set(n.x, n.y, n.z);
-        intersects.push(new THREE.Intersection(hitPoint.clone(), hitNormal.clone(), h, mesh));
+        intersects.push({ point: hitPoint.clone(), normal: hitNormal.clone(), distance: h, object: mesh });
         return;
       }
       t = next;

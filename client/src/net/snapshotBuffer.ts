@@ -11,7 +11,6 @@
  * match allocates exactly `capacity` slots and no more. Slots hold a reference
  * to the snapshot object that arrived on the wire; nothing is copied.
  */
-import { SNAPSHOT_HZ, TICK_MS } from "@shared/protocol";
 import type { GameEvent, ProtocolEntity } from "@shared/protocol";
 
 /** The `game:snapshot` payload as it arrives on the wire. */
@@ -35,9 +34,6 @@ export interface BufferedSnapshot {
   readonly ack: number;
   /** Entity table indexed by id — built once per snapshot, then reused. */
   readonly entities: ReadonlyMap<number, ProtocolEntity>;
-  /** One-way delay: local receipt minus the server's own clock. Unused for
-   *  interpolation (that uses `serverMs`), but the latency report wants it. */
-  readonly transitMs: number;
 }
 
 export interface SnapshotBufferStats {
@@ -104,7 +100,6 @@ export class SnapshotBuffer {
       receivedAtMs,
       ack: snapshot.ack,
       entities: indexEntities(snapshot.entities),
-      transitMs: receivedAtMs - snapshot.server_ms,
     };
 
     const writeAt = (this.head + this.count) % this.capacity;
@@ -259,9 +254,3 @@ function indexEntities(entities: ProtocolEntity[]): ReadonlyMap<number, Protocol
   for (const entity of entities) map.set(entity.id, entity);
   return map;
 }
-
-/** Nominal snapshot interval, used by the metrics window as an expectation. */
-export const SNAPSHOT_INTERVAL_MS = 1000 / SNAPSHOT_HZ;
-
-/** One simulation step — the granularity prediction advances in. */
-export const TICK_DURATION_MS = TICK_MS;

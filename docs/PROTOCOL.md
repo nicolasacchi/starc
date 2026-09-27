@@ -69,6 +69,12 @@ Unidentified connections may only send `identify` and are disconnected after
 }
 ```
 
+`lobby:chat` carries a match's chat. `lines` is the backlog (up to 100,
+oldest first) plus any new line, so a client that just joined renders the
+whole room from one message and needs no separate history request. It is sent
+on the per-match stream `lobby:match:<id>`, which a connection subscribes to
+only while it is in that room.
+
 Errors use `error` with `{ code, message, fatal }`. Codes:
 `unauthenticated`, `not_found`, `lobby_full`, `already_in_match`,
 `wrong_password`, `not_host`, `not_ready`, `invalid_payload`,
@@ -90,9 +96,9 @@ so no opening world-state payload is transmitted.
   "countdown_ms": 3000,
   "players": [
     { "player_id": 7, "slot": 0, "race": "terran", "name": "nik",
-      "team": 1, "start": { "x": 32.0, "y": 32.0 } },
+      "team": 1, "start": { "x": 32.0, "z": 32.0 } },
     { "player_id": 8, "slot": 1, "race": "zerg", "name": "zz",
-      "team": 2, "start": { "x": 96.0, "y": 96.0 } }
+      "team": 2, "start": { "x": 96.0, "z": 96.0 } }
   ]
 }
 ```
@@ -114,15 +120,15 @@ server rebases them onto the current authoritative tick.
   "v": 1, "t": "game:command", "id": "…", "ts": 0,
   "from_tick": 840,
   "commands": [
-    { "c": "move",    "ids": [101, 102], "x": 40.5, "y": 12.25, "queue": false },
+    { "c": "move",    "ids": [101, 102], "x": 40.5, "z": 12.25, "queue": false },
     { "c": "attack",  "ids": [101], "target_id": 550, "queue": true },
     { "c": "stop",    "ids": [101] },
     { "c": "hold",    "ids": [102] },
-    { "c": "patrol",  "ids": [102], "x": 20, "y": 20, "x2": 30, "y2": 30 },
+    { "c": "patrol",  "ids": [102], "x": 20, "z": 20, "x2": 30, "z2": 30 },
     { "c": "train",   "building_id": 200, "unit_type": "marine", "count": 1 },
-    { "c": "build",   "worker_id": 101, "unit_type": "barracks", "x": 35, "y": 30 },
+    { "c": "build",   "worker_id": 101, "unit_type": "barracks", "x": 35, "z": 30 },
     { "c": "cancel",  "building_id": 200 },
-    { "c": "rally",   "building_id": 200, "x": 40, "y": 40 },
+    { "c": "rally",   "building_id": 200, "x": 40, "z": 40 },
     { "c": "harvest", "worker_id": 101 },
     { "c": "ability", "ids": [550], "ability": "stimpack" },
     { "c": "select",  "ids": [101] },
@@ -137,7 +143,7 @@ Field rules:
 - All commands in a batch are validated independently. Valid ones are applied
   in array order; invalid ones are dropped individually.
 - `queue: true` appends behind the current order queue instead of replacing.
-- Coordinates are world-space metres, `0 ≤ x,y < 256`.
+- Coordinates are world-space metres, `0 ≤ x,z < 256`.
 - `unit_type` must exist in the shared roster for the issuing player's race.
 - Ownership is enforced: a player may only issue orders to entities they own.
 
@@ -177,14 +183,14 @@ the client may drop prediction history at or below it.
 
 ```json
 {
-  "id": 101, "ty": "marine", "pl": 7, "x": 40.5, "y": 12.25, "z": 0.0,
+  "id": 101, "ty": "marine", "pl": 7, "x": 40.5, "z": 12.25, "y": 0.4,
   "hp": 45, "hp_max": 45, "mp": 0, "mp_max": 0,
   "ang": 1.5708, "st": "idle",
   "w": 0.0,               // weapon cooldown, seconds remaining
   "sel": 0,               // selected for whom: 0 none, 1 self, 2 ally, 3 enemy
   "tid": 0,               // current target entity id, 0 = none
   "ord": 0,               // 0 = none, else 1 move / 2 attack / 3 harvest / 4 patrol
-  "ox": 0.0, "oy": 0.0,   // order destination
+  "ox": 0.0, "oz": 0.0,   // order destination
   "prog": 0.0,            // construction / production progress 0..1
   "cargo": 0,             // resource units carried
   "res": 200,             // player resources (only on the player's own workers)
@@ -194,8 +200,10 @@ the client may drop prediction history at or below it.
 ```
 
 Fields are omitted when they equal the type's static default, to keep frames
-small. `z` is terrain height and is authoritative — clients must not
-recompute it from their own heightmap.
+small. The ground plane is `x`/`z` and height is `y` — the three.js
+Y-up convention, matching `shared/TERRAIN.md` and the client renderer.
+`y` is authoritative terrain height: clients must not recompute it from
+their own height field, or units visibly float or sink.
 
 `st` is one of: `idle, moving, attacking, harvesting, returning, building,
 training, casting, dead`.
@@ -208,13 +216,13 @@ Events are transient (one snapshot only) and drive VFX, audio and floating
 text. They are never replayed for interpolation.
 
 ```json
-{ "e": "shot",  "id": 101, "x": 40.5, "y": 12.25, "z": 1.0, "tx": 44, "ty": 12, "tz": 0.8 }
+{ "e": "shot",  "id": 101, "x": 40.5, "z": 12.25, "y": 1.0, "tx": 44, "tz": 12, "ty": 0.8 }
 { "e": "hit",   "id": 101, "tid": 550, "dmg": 9, "crit": false, "shield": false }
-{ "e": "death", "id": 550, "ty": "zealot", "x": 44, "y": 12, "z": 0.4, "killer": 101 }
-{ "e": "built", "id": 200, "ty": "barracks", "x": 35, "y": 30, "z": 0 }
-{ "e": "proj",  "id": 9001, "ty": "bullet", "x": 1, "y": 2, "z": 3, "tx": 4, "ty": 5, "tz": 6 }
-{ "e": "ability", "id": 550, "ab": "stimpack", "x": 1, "y": 2, "z": 3 }
-{ "e": "res",   "pl": 7, "amount": 15, "x": 1, "y": 2 }
+{ "e": "death", "id": 550, "ty": "zealot", "x": 44, "z": 12, "y": 0.4, "killer": 101 }
+{ "e": "built", "id": 200, "ty": "barracks", "x": 35, "z": 30, "y": 0 }
+{ "e": "proj",  "id": 9001, "ty": "bullet", "x": 1, "z": 2, "y": 3, "tx": 4, "tz": 5, "ty": 6 }
+{ "e": "ability", "id": 550, "ab": "stimpack", "x": 1, "z": 2, "y": 3 }
+{ "e": "res",   "pl": 7, "amount": 15, "x": 1, "z": 2 }
 { "e": "alert", "text": "Under attack" }
 ```
 
@@ -295,7 +303,7 @@ a 30-day expiry, stored in the `sessions` table.
                    "result": "defeat" } ]
   },
   "commands": [ { "tick": 0, "player_id": 7, "index": 0, "c": "move",
-                  "ids": [101], "x": 40.5, "y": 12.25, "queue": false } ],
+                  "ids": [101], "x": 40.5, "z": 12.25, "queue": false } ],
   "final_state": { "entities": [ Entity... ] }
 }
 ```

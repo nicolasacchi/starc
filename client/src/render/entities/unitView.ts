@@ -1,12 +1,30 @@
 /**
- * Unit view: a fully procedural rig animated from entity state.
+ * Unit view: a fully procedural animation rig driven by entity state.
  *
- * ASSETS: 100% procedural, no files of any kind. The hull comes from
- * `unitGeometry(typeKey)` (the shared ref-counted geometry cache), the skin
- * from `materialFor(typeKey, race)` (the shared material library), and every
- * limb, weapon and the air shadow is built here from one shared unit cube, one
- * shared unit plane and a runtime-generated radial-gradient `DataTexture`.
- * Nothing is fetched, so the module works with an empty network.
+ * ASSETS: 100% procedural, no files of any kind. The model is
+ * `unitGeometry(typeKey)` — one merged, ref-counted `BufferGeometry` per unit
+ * type that already contains the legs, torso, head, weapon and wings at the
+ * roster's own `size.radius` / `size.height` — skinned by `materialFor(
+ * typeKey, race)` from the shared material library. The only geometry this
+ * module builds is the soft ground-shadow quad under air units, from a shared
+ * unit plane and a runtime radial-gradient `DataTexture`. Nothing is fetched,
+ * so the module works with an empty network.
+ *
+ * ## Where the animation lives
+ * The merged geometry is the silhouette, so nothing is attached to it. Every
+ * state is animated on the chassis that carries it:
+ *
+ *  * **idle** — a slow breathing rise/fall plus a hair of roll.
+ *  * **moving** — a stride bounce at twice the step rate, a sway roll and a
+ *    lean into the direction of travel. The walk phase is advanced by the
+ *    distance the unit actually covered, not by time, so a unit that speeds
+ *    up, gets knocked back or is teleported by interpolation keeps its feet in
+ *    sync with the ground. Ground units also seat themselves on
+ *    `heightField.sample` and tilt to the slope.
+ *  * **attacking** — a recoil kick backwards along the facing, proportional to
+ *    the unit's weapon damage, returned by a spring.
+ *  * **air** — a hover cycle, a bank into turns, and a blob shadow that tracks
+ *    the ground while the hull keeps its authoritative altitude.
  *
  * ## Which path a unit takes
  * `SceneManager` picks per frame, and the choice is explicit:
@@ -24,14 +42,13 @@
  * the player is actually watching keep their animation.
  *
  * ## No per-frame allocation
- * `update()` only writes numbers into existing objects. Limbs, weapons and
- * shadows are built once in the constructor; the shared cube, plane and shadow
- * texture live for the process and are released by
- * `disposeUnitViewShared()`.
+ * `update()` only writes numbers into existing objects. The shadow quad is
+ * built once in the constructor; the shared plane and shadow texture live for
+ * the process and are released by `disposeUnitViewShared()`.
  */
 import * as THREE from "three";
 
-import type { MapDef, Race } from "@shared/protocol";
+import type { MapDef } from "@shared/protocol";
 import { attackOf, entityDef } from "@shared/gameData";
 import type { QualitySettings } from "@render/core/quality";
 import { materialFor } from "@render/materials/materialLibrary";
@@ -44,26 +61,15 @@ import type { EntityViewOptions, SelectionState } from "@render/entities/entityV
 const TAU = Math.PI * 2;
 /** Below this speed (m/s) a unit counts as standing still. */
 const MOVE_EPSILON = 0.25;
-/** Ground metres travelled per full leg cycle, per metre of radius. */
+/** Ground metres travelled per full stride cycle, per metre of radius. */
 const STRIDE_PER_RADIUS = 2.6;
-const WALK_SWING = 0.72;
 /** Weapon-recoil spring, in s^-1. */
-const RECOIL_STIFFNESS = 160;
-const RECOIL_DAMPING = 18;
-
-interface Limb {
-  pivot: THREE.Object3D;
-  /** Phase offset in the walk cycle so legs alternate instead of marching. */
-  offset: number;
-  restY: number;
-}
+const RECOIL_STIFFNESS = 150;
+const RECOIL_DAMPING = 17;
 
 interface Rig {
   chassis: THREE.Group;
   body: THREE.Mesh;
-  limbs: Limb[];
-  weapon: THREE.Group | null;
-  wing: THREE.Object3D | null;
   shadow: THREE.Mesh | null;
   shadowHolder: THREE.Group;
 }
@@ -72,15 +78,12 @@ interface Rig {
 /* Shared, process-lifetime assets                                     */
 /* ------------------------------------------------------------------ */
 
-let sharedCube: THREE.BoxGeometry | null = null;
 let sharedShadowPlane: THREE.PlaneGeometry | null = null;
 let sharedShadowMaterial: THREE.MeshBasicMaterial | null = null;
 let sharedShadowTexture: THREE.DataTexture | null = null;
 
-/** Releases the cube and shadow assets shared by every unit view. */
+/** Releases the shadow assets shared by every air unit's rig. */
 export function disposeUnitViewShared(): void {
-  sharedCube?.dispose();
-  sharedCube = null;
   sharedShadowPlane?.dispose();
   sharedShadowPlane = null;
   sharedShadowMaterial?.dispose();
@@ -89,15 +92,7 @@ export function disposeUnitViewShared(): void {
   sharedShadowTexture = null;
 }
 
-function cube(): THREE.BoxGeometry {
-  if (sharedCube === null) {
-    // Unit cube: every limb and weapon scales it, so one geometry serves all.
-    sharedCube = new THREE.BoxGeometry(1, 1, 1);
-  }
-  return sharedCube;
-}
-
-/** Soft radial blob used as the fake ground shadow under air units. */
+/** Soft radial blob used as the ground shadow under air units. */
 function shadowAssets(): { geometry: THREE.PlaneGeometry; material: THREE.MeshBasicMaterial } {
   if (sharedShadowPlane === null) {
     sharedShadowPlane = new THREE.PlaneGeometry(1, 1);
@@ -135,11 +130,6 @@ function shadowAssets(): { geometry: THREE.PlaneGeometry; material: THREE.MeshBa
   return { geometry: sharedShadowPlane, material: sharedShadowMaterial };
 }
 
-/** Limb count is a shape rule derived from the roster's collision radius. */
-function limbCount(radius: number): number {
-  return radius >= 0.65 ? 4 : 2;
-}
-
 function wrapAngle(a: number): number {
   let v = a;
   while (v > Math.PI) v -= TAU;
@@ -148,7 +138,7 @@ function wrapAngle(a: number): number {
 }
 
 export class UnitView extends AbstractEntityView {
-  /** The procedural rig, exposed for the batch renderer and for tests. */
+  /** The rig, exposed for the batch renderer and for tests. */
   readonly rig: Rig;
 
   private readonly terrain: HeightField;
@@ -169,7 +159,6 @@ export class UnitView extends AbstractEntityView {
   constructor(options: EntityViewOptions, map: MapDef) {
     super(options);
     const def = entityDef(options.typeKey);
-    const material = materialFor(def.key, this.race);
     this.terrain = heightField(map);
     this.legStride = Math.max(0.5, this.radius * STRIDE_PER_RADIUS);
     // A stable per-entity phase stops a whole army bobbing in lockstep.
@@ -179,75 +168,10 @@ export class UnitView extends AbstractEntityView {
 
     const chassis = new THREE.Group();
     chassis.name = "chassis";
-
-    const body = new THREE.Mesh(unitGeometry(def.key), material);
+    const body = new THREE.Mesh(unitGeometry(def.key), materialFor(def.key, this.race));
     body.castShadow = true;
     body.receiveShadow = true;
     chassis.add(body);
-
-    const limbs: Limb[] = [];
-    if (!this.isAir) {
-      const count = limbCount(this.radius);
-      const legHeight = this.height * 0.42;
-      const legThickness = Math.max(0.08, this.radius * 0.22);
-      for (let i = 0; i < count; i++) {
-        const pivot = new THREE.Object3D();
-        const side = i % 2 === 0 ? -1 : 1;
-        const row = i < 2 ? -1 : 1;
-        const restY = this.height * 0.5 - legHeight;
-        pivot.position.set(side * this.radius * 0.72, restY, row * this.radius * 0.55);
-        const leg = new THREE.Mesh(cube(), material);
-        leg.scale.set(legThickness, legHeight, legThickness);
-        leg.position.y = -legHeight * 0.5;
-        leg.castShadow = true;
-        pivot.add(leg);
-        chassis.add(pivot);
-        limbs.push({ pivot, offset: (i % 2) * Math.PI, restY });
-      }
-    }
-
-    let weapon: THREE.Group | null = null;
-    if (attack !== null && attack.weapon !== "none") {
-      const heavy = attack.weapon === "cannon" || attack.weapon === "shell";
-      weapon = new THREE.Group();
-      const barrelLength = this.height * (heavy ? 0.55 : 0.34);
-      const thickness = this.radius * (heavy ? 0.22 : 0.13);
-      const barrel = new THREE.Mesh(cube(), material);
-      barrel.scale.set(thickness, thickness, barrelLength);
-      barrel.position.set(this.radius * 0.45, this.height * 0.56, barrelLength * 0.5);
-      barrel.castShadow = true;
-      weapon.add(barrel);
-      if (attack.weapon === "missile") {
-        const pod = new THREE.Mesh(cube(), material);
-        pod.scale.set(thickness * 2.4, thickness * 1.6, thickness * 1.6);
-        pod.position.set(this.radius * 0.45, this.height * 0.78, barrelLength * 0.35);
-        weapon.add(pod);
-      }
-      if (attack.weapon === "claw") {
-        for (const side of [-1, 1]) {
-          const claw = new THREE.Mesh(cube(), material);
-          claw.scale.set(thickness, thickness * 1.4, thickness * 2.6);
-          claw.position.set(this.radius * 0.5 + side * this.radius * 0.3, this.height * 0.5, barrelLength * 0.4);
-          claw.rotation.y = side * 0.3;
-          weapon.add(claw);
-        }
-      }
-      chassis.add(weapon);
-    }
-
-    let wing: THREE.Object3D | null = null;
-    if (this.isAir) {
-      wing = new THREE.Group();
-      const span = Math.max(this.radius * 2.2, 1.2);
-      for (const side of [-1, 1]) {
-        const panel = new THREE.Mesh(cube(), material);
-        panel.scale.set(span, this.height * 0.06, this.radius * 1.4);
-        panel.position.set((side * span) / 2, this.height * 0.62, 0);
-        panel.castShadow = true;
-        wing.add(panel);
-      }
-      chassis.add(wing);
-    }
 
     const shadowHolder = new THREE.Group();
     let shadow: THREE.Mesh | null = null;
@@ -261,7 +185,7 @@ export class UnitView extends AbstractEntityView {
     }
 
     this.group.add(chassis, shadowHolder);
-    this.rig = { chassis, body, limbs, weapon, wing, shadow, shadowHolder };
+    this.rig = { chassis, body, shadow, shadowHolder };
   }
 
   /** True while the view is drawn through the shared instanced batch. */
@@ -292,7 +216,7 @@ export class UnitView extends AbstractEntityView {
     if (batched === this.batched) return;
     this.batched = batched;
     this.rig.chassis.visible = !batched;
-    this.shadowHolder.visible = !batched && this.isAir;
+    this.rig.shadowHolder.visible = !batched && this.isAir;
   }
 
   /** Called by `SceneManager` for every `shot` event fired by this unit. */
@@ -337,8 +261,9 @@ export class UnitView extends AbstractEntityView {
     const speedFactor = Math.min(1, speed / 6);
 
     // Walk phase is driven by distance, not time, so a unit that speeds up or
-    // is knocked back keeps its feet in sync with the ground.
+    // is knocked back keeps its gait in sync with the ground.
     if (travelled > 0) this.walkPhase = (this.walkPhase + (travelled / this.legStride) * TAU) % TAU;
+    const step = this.walkPhase * 2;
 
     const yawDelta = wrapAngle(this.angle - this.lastYaw);
     this.lastYaw = this.angle;
@@ -357,40 +282,33 @@ export class UnitView extends AbstractEntityView {
 
     const chassis = this.rig.chassis;
     let bob: number;
+    let sway: number;
     if (this.isAir) {
-      // Hover: a slow vertical cycle, never settling to the deck.
+      // Hover: a slow vertical cycle plus a lateral drift, never settling.
       bob = 0.18 + Math.sin(this.elapsed * 2.1 + this.bobPhase) * 0.14;
+      sway = Math.sin(this.elapsed * 1.3 + this.bobPhase * 1.7) * 0.04;
     } else if (moving) {
-      bob = Math.abs(Math.sin(this.walkPhase)) * this.height * 0.035 * speedFactor;
+      // Two bounces per stride, the way a biped's mass actually moves.
+      bob = (0.5 - 0.5 * Math.cos(step)) * this.height * 0.07 * speedFactor;
+      sway = Math.sin(step) * 0.09 * speedFactor;
     } else {
       bob = Math.sin(this.elapsed * 1.5 + this.bobPhase) * this.height * 0.012;
+      sway = 0;
     }
     chassis.position.y = (this.isAir ? 0 : seat) + bob;
+    chassis.position.x = sway;
 
     const pitch = this.isAir
       ? speedFactor * 0.24
       : moving * speedFactor * 0.2 + Math.max(-0.4, Math.min(0.4, slopeZ * conform));
     const roll = this.isAir
       ? this.bank * 0.9
-      : this.bank * 0.35 + Math.max(-0.4, Math.min(0.4, -slopeX * conform));
+      : this.bank * 0.35 + sway * 0.6 + Math.max(-0.4, Math.min(0.4, -slopeX * conform));
     chassis.rotation.x += (pitch - chassis.rotation.x) * Math.min(1, dt * 10);
     chassis.rotation.z += (roll - chassis.rotation.z) * Math.min(1, dt * 10);
 
-    // Legs swing about their pivots and reach for the ground on a slope.
-    const swing = moving ? WALK_SWING * speedFactor : 0;
-    for (let i = 0; i < this.rig.limbs.length; i++) {
-      const limb = this.rig.limbs[i];
-      if (limb === undefined) continue;
-      const phase = this.walkPhase + limb.offset;
-      const target = Math.sin(phase) * swing;
-      const pivot = limb.pivot;
-      pivot.rotation.x += (target - pivot.rotation.x) * Math.min(1, dt * 16);
-      const lift = moving ? Math.max(0, Math.cos(phase)) * this.height * 0.05 * speedFactor : 0;
-      const rest = limb.restY + lift;
-      pivot.position.y += (rest - pivot.position.y) * Math.min(1, dt * 12);
-    }
-
-    // Weapon recoil: an impulse into a spring, so the kick reads as force.
+    // Weapon recoil: an impulse into a spring, kicked backwards along the
+    // facing so the whole model reads as recoiling.
     if (this.recoil !== 0 || this.recoilVelocity !== 0) {
       this.recoilVelocity += (-RECOIL_STIFFNESS * this.recoil - RECOIL_DAMPING * this.recoilVelocity) * dt;
       this.recoil += this.recoilVelocity * dt;
@@ -398,21 +316,15 @@ export class UnitView extends AbstractEntityView {
         this.recoil = 0;
         this.recoilVelocity = 0;
       }
-      if (this.rig.weapon !== null) this.rig.weapon.position.z = this.recoil * this.radius * 0.4;
     }
+    chassis.position.z = -this.recoil * this.radius * 0.5;
 
-    if (this.isAir) {
-      if (this.rig.wing !== null) {
-        this.rig.wing.rotation.z = this.bank * 0.6;
-        this.rig.wing.rotation.x = -this.bank * 0.25;
-      }
-      if (this.rig.shadow !== null) {
-        // The blob stays on the ground while the hull keeps its authoritative
-        // altitude; it spreads as the unit climbs.
-        const altitude = Math.max(0.5, py - groundY);
-        this.rig.shadow.position.set(0, groundY - py + 0.08, 0);
-        this.rig.shadow.scale.setScalar(this.radius * 5 * (1 + altitude * 0.05));
-      }
+    if (this.isAir && this.rig.shadow !== null) {
+      // The blob stays on the ground while the hull keeps its authoritative
+      // altitude; it spreads as the unit climbs.
+      const altitude = Math.max(0.5, py - groundY);
+      this.rig.shadow.position.set(0, groundY - py + 0.08, 0);
+      this.rig.shadow.scale.setScalar(this.radius * 5 * (1 + altitude * 0.05));
     }
   }
 
@@ -422,9 +334,10 @@ export class UnitView extends AbstractEntityView {
   }
 
   protected override releaseResources(): void {
-    // Every geometry and material here is shared — the ref-counted cache, the
-    // material library, or the process-lifetime set released by
-    // disposeUnitViewShared() — so teardown is just unlinking the children.
+    // The model geometry belongs to the shared ref-counted cache and the
+    // material to the shared library; the shadow plane and texture are the
+    // process-lifetime set released by disposeUnitViewShared(). Teardown is
+    // therefore just unlinking the children.
     this.group.clear();
   }
 }
@@ -487,6 +400,7 @@ export class UnitBatchRenderer {
     const m = bucket.mesh.instanceMatrix.array as Float32Array;
     const o = bucket.count * 16;
     // Yaw-only rotation written straight into the matrix, no Matrix4 needed.
+    // Local +Z is forward, matching the rig's facing convention.
     const c = Math.cos(view.angle);
     const s = Math.sin(view.angle);
     m[o] = c;

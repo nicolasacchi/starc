@@ -5,8 +5,7 @@
  * constructor, so the collector's footprint is constant however long the session
  * runs: a ten-minute match holds exactly `window` samples per series and
  * nothing more. Nothing here allocates after construction except the report
- * object and the percentile scratch copy, both produced only when the overlay
- * asks for one.
+ * object, produced only when the overlay asks for one.
  *
  * What is measured and why:
  *
@@ -56,7 +55,7 @@ export interface MetricsReport {
   predictionErrorM: number;
   droppedFrames: number;
   framesPerSecond: number;
-  /** Samples currently held in the shortest series (never exceeds `window`). */
+  /** Samples currently held in the rtt series (never exceeds `window`). */
   samples: number;
   /** Lifetime counters since construction or the last `reset()`. */
   totals: MetricsTotals;
@@ -65,12 +64,14 @@ export interface MetricsReport {
 /** Fixed-capacity rolling window over a numeric series. */
 class Ring {
   private readonly values: Float64Array;
+  private readonly scratch: Float64Array;
   private write = 0;
   private filled = 0;
   private sum = 0;
-  private scratch = new Float64Array(0);
+  readonly capacity: number;
 
-  constructor(readonly capacity: number) {
+  constructor(capacity: number) {
+    this.capacity = capacity;
     this.values = new Float64Array(capacity);
     this.scratch = new Float64Array(capacity);
   }
@@ -110,19 +111,13 @@ class Ring {
     return hits;
   }
 
-  /** Copies the live window into the scratch buffer and sorts it. */
-  private sortedScratch(): Float64Array {
-    for (let i = 0; i < this.filled; i++) this.scratch[i] = this.values[i];
-    this.scratch.subarray(0, this.filled).sort();
-    return this.scratch;
-  }
-
-  /** Percentile with nearest-rank, `p` in [0, 1]. */
+  /** Nearest-rank percentile, `p` in [0, 1]. Uses the preallocated scratch. */
   percentile(p: number): number {
     if (this.filled === 0) return 0;
-    const sorted = this.sortedScratch();
+    for (let i = 0; i < this.filled; i++) this.scratch[i] = this.values[i];
+    this.scratch.subarray(0, this.filled).sort();
     const rank = Math.min(this.filled - 1, Math.max(0, Math.round((this.filled - 1) * p)));
-    return sorted[rank];
+    return this.scratch[rank];
   }
 
   clear(): void {
@@ -136,8 +131,9 @@ class Ring {
 
 /**
  * Bounded FIFO of in-flight command batches awaiting their `ack`. The server
- * echoes the highest `from_tick` it has processed, so the answer to "how long
- * did my click take" is the age of the oldest still-pending batch it covers.
+ * echoes the highest `from_tick` it has processed, so "how long did my click
+ * take" is the age of the oldest batch that ack newly covers. Batches already
+ * covered by an earlier ack are never reported twice.
  */
 class PendingAcks {
   private readonly ticks: Float64Array;
@@ -145,6 +141,7 @@ class PendingAcks {
   private head = 0;
   private size = 0;
   private next = 0;
+  private resolvedTick = Number.NEGATIVE_INFINITY;
 
   constructor(capacity: number) {
     this.ticks = new Float64Array(capacity);
@@ -159,15 +156,18 @@ class PendingAcks {
     this.next = (this.next + 1) % this.ticks.length;
   }
 
-  /** Age of the oldest still-pending batch covered by `ack`, or -1 if none. */
+  /** Age of the oldest batch newly covered by `ack`, or -1 when there is none. */
   latencyForAck(ack: number, nowMs: number): number {
     let oldest = -1;
     for (let i = 0; i < this.size; i++) {
       const slot = (this.head + i) % this.ticks.length;
-      if (this.ticks[slot] > ack) continue;
+      const tick = this.ticks[slot];
+      if (tick > ack || tick <= this.resolvedTick) continue;
       if (oldest < 0 || this.stamps[slot] < oldest) oldest = this.stamps[slot];
     }
-    return oldest < 0 ? -1 : nowMs - oldest;
+    if (oldest < 0) return -1;
+    this.resolvedTick = ack;
+    return nowMs - oldest;
   }
 
   clear(): void {
@@ -176,6 +176,7 @@ class PendingAcks {
     this.head = 0;
     this.size = 0;
     this.next = 0;
+    this.resolvedTick = Number.NEGATIVE_INFINITY;
   }
 }
 
@@ -203,7 +204,6 @@ export class NetMetrics {
   private readonly inboundPackets: Ring;
   private readonly pendingAcks: PendingAcks;
   private lastSnapshotAtMs = 0;
-  private lastReceiptSentAtMs = 0;
   private snapshotCount = 0;
   private commandCount = 0;
   private receiptCount = 0;
@@ -225,16 +225,14 @@ export class NetMetrics {
     this.pendingAcks = new PendingAcks(Math.max(8, Math.floor(options.pendingCapacity ?? 64)));
   }
 
-  /** A STOMP frame carrying a `receipt` was written to the socket. */
-  recordReceiptSent(sentAtMs: number = Date.now()): void {
-    this.lastReceiptSentAtMs = sentAtMs;
-  }
-
-  /** The matching `RECEIPT` frame came back: this is the round-trip time. */
-  recordReceiptReceived(nowMs: number = Date.now()): void {
+  /**
+   * A frame carrying `receipt` was acknowledged. Both timestamps come from the
+   * transport, so this is the true end-to-end round trip rather than a guess.
+   */
+  recordReceipt(sentAtMs: number, receivedAtMs: number = Date.now()): void {
     this.receiptCount++;
-    if (this.lastReceiptSentAtMs > 0) this.rtt.push(nowMs - this.lastReceiptSentAtMs);
-    this.inboundPackets.push(nowMs);
+    this.rtt.push(receivedAtMs - sentAtMs);
+    this.inboundPackets.push(receivedAtMs);
   }
 
   /** A snapshot arrived; `bytes` is its serialised length. */
@@ -283,7 +281,6 @@ export class NetMetrics {
   snapshot(nowMs: number = Date.now()): MetricsReport {
     const frames = this.frameMs.count;
     const frameSpanMs = this.frameMs.total();
-    const packetsLastSecond = this.inboundPackets.countAtOrAbove(nowMs - 1000);
     return {
       rttMs: this.rtt.mean(),
       rttP95Ms: this.rtt.percentile(0.95),
@@ -291,7 +288,7 @@ export class NetMetrics {
       snapshotIntervalMs: this.snapshotInterval.mean(),
       snapshotJitterMs: this.snapshotJitter.mean(),
       commandLatencyMs: this.commandLatency.mean(),
-      packetsPerSecond: packetsLastSecond,
+      packetsPerSecond: this.inboundPackets.countAtOrAbove(nowMs - 1000),
       snapshotBytes: this.snapshotBytes.mean(),
       interpolationDelayMs: this.interpolationDelay.mean(),
       predictionErrorM: this.predictionError.mean(),
@@ -337,7 +334,6 @@ export class NetMetrics {
     this.inboundPackets.clear();
     this.pendingAcks.clear();
     this.lastSnapshotAtMs = 0;
-    this.lastReceiptSentAtMs = 0;
     this.snapshotCount = 0;
     this.commandCount = 0;
     this.receiptCount = 0;

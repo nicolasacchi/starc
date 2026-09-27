@@ -64,9 +64,11 @@ module Api
         player.errors.of_kind?(:name, :taken)
       end
 
-      def invalid_message(error)
-        messages = error.record&.errors&.full_messages
-        return "Invalid player" if messages.nil? || messages.empty?
+      # Takes the unsaved record, not a `RecordInvalid` — `build_player` saves
+      # and inspects errors directly so it can distinguish a duplicate name.
+      def invalid_message(player)
+        messages = player.errors.full_messages
+        return "Invalid player" if messages.empty?
 
         messages.join(", ")
       end

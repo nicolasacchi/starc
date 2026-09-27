@@ -28,7 +28,7 @@
  * estimates its offset from them (corrected by half the measured RTT) and the
  * renderer interpolates on *that* clock, delayed by two snapshot intervals.
  */
-import { PROTOCOL_VERSION, SNAPSHOT_HZ, TICK_MS } from "@shared/protocol";
+import { PROTOCOL_VERSION, TICK_MS } from "@shared/protocol";
 import type {
   ClientMessage,
   Command,
@@ -39,7 +39,12 @@ import type {
 } from "@shared/protocol";
 import { TypedEmitter } from "./events";
 import type { Unsubscribe } from "./events";
-import { createWorldSample, Interpolator, MAX_EXTRAPOLATION_MS } from "./interpolation";
+import {
+  createWorldSample,
+  DEFAULT_INTERPOLATION_DELAY_MS,
+  Interpolator,
+  MAX_EXTRAPOLATION_MS,
+} from "./interpolation";
 import type { WorldSample } from "./interpolation";
 import { NetMetrics } from "./metrics";
 import { MovementPredictor } from "./prediction";
@@ -187,7 +192,7 @@ export class GameConnection {
     this.maxIdsPerCommand = options.maxIdsPerCommand ?? MAX_IDS_PER_COMMAND;
     this.flushIntervalMs = 1000 / (options.maxBatchesPerSecond ?? MAX_BATCHES_PER_SECOND);
     this.maxCommandsPerSecond = options.maxCommandsPerSecond ?? MAX_COMMANDS_PER_SECOND;
-    this.interpolationDelayMs = options.interpolationDelayMs ?? 2000 / SNAPSHOT_HZ;
+    this.interpolationDelayMs = options.interpolationDelayMs ?? DEFAULT_INTERPOLATION_DELAY_MS;
     this.uuid = options.uuid ?? defaultUuid;
     this.timer = options.timer ?? systemTimer;
 
@@ -213,7 +218,7 @@ export class GameConnection {
     this.transport.onError((err) => this.emitError("transport_error", err.message, false));
     this.transport.onReceipt((_id, sentAtMs, receivedAtMs) => {
       this.rttMs = Math.max(0, receivedAtMs - sentAtMs);
-      this.metrics.recordReceiptReceived(receivedAtMs);
+      this.metrics.recordReceipt(sentAtMs, receivedAtMs);
     });
   }
 
@@ -492,6 +497,9 @@ export class GameConnection {
     if (state === "connected") {
       this.dropPending = false;
       this.reconnect.notifyConnected();
+      // A controller-driven reconnect re-subscribes from the resync, once the
+      // stale world has been thrown away; doing it here would subscribe twice.
+      if (this.reconnect.recovering) return;
       if (this.currentState === "connecting" || this.currentState === "reconnecting") {
         this.subscribeAll();
         this.setState("waiting");

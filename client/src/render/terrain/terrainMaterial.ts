@@ -270,8 +270,8 @@ const LAYERS: readonly LayerSpec[] = [
   { cells: 4, octaves: 4, gain: 0.5, normalStrength: 0.45, contrast: 0.18, seedOffset: 409 },
 ];
 
-/** World metres per tile of each layer. Mirrored by the `scUv*` uniforms. */
-export const LAYER_TILE_METRES: readonly number[] = [7, 5, 9, 11];
+/** World metres per tile of each layer, in the same order as `LAYERS`. */
+const LAYER_TILE_METRES: readonly number[] = [7, 5, 9, 11];
 
 /**
  * Albedo detail map: R = fine detail, G = macro mottle, B = speckle,

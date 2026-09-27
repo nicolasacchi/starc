@@ -124,6 +124,7 @@ const PLACEMENT_GRID = 0.5;
 
 interface DragState {
   button: number;
+  pointerId: number;
   startX: number;
   startY: number;
   clientX: number;
@@ -160,6 +161,8 @@ export class InputController {
   private heldCamera = new Set<HotkeyAction>();
   private lastPatrol: WorldPoint | null = null;
   private previousOrder: WorldPoint | null = null;
+  /** The selection Tab is cycling through, fixed when cycling started. */
+  private subgroupPool: number[] = [];
   private subgroupIndex = 0;
   private zoomAccumulator = 0;
   private lastStepAt: number | null = null;
@@ -173,7 +176,11 @@ export class InputController {
     this.playerId = opts.myPlayerId;
     this.hotkeys = new HotkeyManager((action, ctx) => this.onHotkey(action, ctx), {
       now: opts.now,
-      ignore: (event) => opts.chatOpen?.() === true,
+      ignore: () => opts.chatOpen?.() === true,
+      resolveRace: () => {
+        this.ensureRace();
+        return this.race;
+      },
     });
   }
 
@@ -385,6 +392,11 @@ export class InputController {
       case "cycle_subgroup":
         return this.cycleSubgroup();
       case "placement_key":
+        // A different building letter swaps the ghost instead of dropping it.
+        if (ctx.entity && ctx.entity !== this.pendingPlacement && isBuilding(ctx.entity)) {
+          this.beginPlacement(ctx.entity);
+          return true;
+        }
         return this.confirmPlacement();
       default:
         return false;
@@ -392,16 +404,20 @@ export class InputController {
   }
 
   /**
-   * Buildings open a placement ghost (as in StarCraft); units train from a
-   * selected producer, and a race's own worker — which nothing produces — falls
-   * back to selecting every worker of that type. Returning false lets the same
-   * key fall through to its next binding, e.g. camera pan.
+   * Buildings open a placement ghost (as in StarCraft) — but only when a
+   * selected worker can actually start one, otherwise the key falls through:
+   * `P` is an engineering bay for Terran *and* patrol, and patrol is the more
+   * useful reading of the key unless a building is genuinely on the way.
+   * Units train from a selected producer, and a race's own worker — which
+   * nothing produces — falls back to selecting every worker of that type.
    */
   private onBuildHotkey(entityKey: string, count: number): boolean {
     this.ensureRace();
     if (!hasEntityDef(entityKey)) return false;
     const def = entityDef(entityKey);
     if (def.kind === "building") {
+      const worker = this.placementWorker();
+      if (worker === null || (worker.res ?? 0) < def.cost.minerals) return false;
       this.beginPlacement(entityKey);
       return true;
     }
@@ -420,7 +436,7 @@ export class InputController {
    */
   private ensureRace(): void {
     if (this.race) return;
-    const own = this.getEntities().filter((e) => e.pl === this.playerId && hasEntityDef(e.ty));
+    const own = this.opts.getEntities().filter((e) => e.pl === this.playerId && hasEntityDef(e.ty));
     for (const race of RACES) {
       const roster = GAME.race_index[race];
       if (roster && own.some((e) => roster.includes(e.ty))) {
@@ -432,7 +448,7 @@ export class InputController {
 
   private selectArmy(): boolean {
     const ids: number[] = [];
-    for (const e of this.getEntities()) {
+    for (const e of this.opts.getEntities()) {
       if (e.pl !== this.playerId || e.st === "dead") continue;
       if (!hasEntityDef(e.ty) || isBuilding(e.ty) || attackOf(e.ty) === null) continue;
       ids.push(e.id);
@@ -443,7 +459,7 @@ export class InputController {
   }
 
   private selectWorkers(entityKey: string): boolean {
-    const ids = this.getEntities()
+    const ids = this.opts.getEntities()
       .filter((e) => e.pl === this.playerId && e.st !== "dead" && e.ty === entityKey)
       .map((e) => e.id);
     if (ids.length === 0) return false;
@@ -484,13 +500,23 @@ export class InputController {
   }
 
   /**
-   * Tab moves between selection sectors: connected clumps of the current
-   * selection, the way StarCraft lets you attack a base piece by piece.
+   * Tab moves between selection sectors: connected clumps of the selection,
+   * the way StarCraft lets you hit a base piece by piece. The pool is the
+   * selection as it stood when the cycling started, so Tab keeps rotating
+   * through the original army instead of re-deriving from each sector.
    */
   private cycleSubgroup(): boolean {
     const ids = this.selection.selectedIds().filter((id) => this.isAliveOwn(id));
-    if (ids.length < 2) return false;
-    const sectors = this.selectionSectors(ids);
+    const pool = this.subgroupPool.filter((id) => this.isAliveOwn(id));
+    // A sector is a subset of the pool, so a selection still inside it means
+    // the player is cycling rather than starting a fresh one.
+    const continuing = pool.length > 1 && ids.length > 0 && ids.every((id) => pool.includes(id));
+    if (!continuing) {
+      this.subgroupPool = ids;
+      this.subgroupIndex = 0;
+    }
+    if (this.subgroupPool.length < 2) return false;
+    const sectors = this.selectionSectors(this.subgroupPool);
     if (sectors.length < 2) return false;
     this.subgroupIndex = (this.subgroupIndex + 1) % sectors.length;
     this.setSelection(sectors[this.subgroupIndex], false);
@@ -572,14 +598,14 @@ export class InputController {
     }
 
     if (e.button === 1) {
-      this.drag = this.startDrag(e);
+      this.beginDrag(e);
       this.modeState = "dragging_camera";
-      e.preventDefault();
+      e.preventDefault?.();
       return;
     }
     if (e.button !== 0 && e.button !== 2) return;
 
-    this.drag = this.startDrag(e);
+    this.beginDrag(e);
     if (e.button !== 0) return;
 
     const hit = this.drag.target;
@@ -638,6 +664,12 @@ export class InputController {
     this.pointerGround = this.groundAt(e.clientX, e.clientY);
     const drag = this.drag;
     this.drag = null;
+    if (drag) {
+      this.pointerTarget?.releasePointerCapture?.(drag.pointerId);
+      // The release point is the authoritative far corner of the box.
+      drag.clientX = e.clientX;
+      drag.clientY = e.clientY;
+    }
     if (!drag) {
       if (this.modeState !== "placing") this.modeState = "normal";
       return;
@@ -654,17 +686,17 @@ export class InputController {
   private readonly onWheel = (event: Event): void => {
     if (this.disposed) return;
     const e = event as WheelEvent;
-    e.preventDefault();
+    e.preventDefault?.();
     this.intent({ kind: "zoom", steps: e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP });
   };
 
   private readonly onContextMenu = (event: Event): void => {
-    event.preventDefault();
+    event.preventDefault?.();
   };
 
   private readonly onKeyDown = (event: Event): void => {
     if (this.disposed) return;
-    if (this.hotkeys.handle(event as KeyboardEvent)) event.preventDefault();
+    if (this.hotkeys.handle(event as KeyboardEvent)) event.preventDefault?.();
   };
 
   private readonly onKeyUp = (event: Event): void => {
@@ -672,10 +704,11 @@ export class InputController {
     this.hotkeys.handle(event as KeyboardEvent);
   };
 
-  private startDrag(e: PointerEvent): DragState {
+  private beginDrag(e: PointerEvent): void {
     const point = this.groundAt(e.clientX, e.clientY);
-    return {
+    this.drag = {
       button: e.button,
+      pointerId: e.pointerId,
       startX: e.clientX,
       startY: e.clientY,
       clientX: e.clientX,
@@ -686,15 +719,20 @@ export class InputController {
       ctrl: e.ctrlKey,
       moved: false,
     };
+    // Keep receiving moves even when the cursor leaves the canvas.
+    (this.pointerTarget ?? this.element).setPointerCapture?.(e.pointerId);
   }
 
   /** A press that never became a drag. */
   private finishClick(drag: DragState): void {
-    const target = drag.target && this.isAlive(drag.target.id) ? drag.target : null;
+    const seen = drag.target
+      ? this.opts.getEntities().find((e) => e.id === drag.target?.id && e.st !== "dead")
+      : undefined;
+    const target = seen ?? null;
     const isDouble = this.selection.noteClick(target?.id ?? null, this.clock());
     if (target) {
       if (isDouble && target.pl === this.playerId) {
-        const result = this.selection.selectSameType(target.id, this.getEntities(), {
+        const result = this.selection.selectSameType(target.id, this.opts.getEntities(), {
           myPlayerId: this.playerId,
           additive: drag.shift,
           isVisible: this.opts.scene.isVisible,
@@ -703,18 +741,19 @@ export class InputController {
       }
       return;
     }
-    // Clicked bare ground: order the current selection there, then drop it.
-    if (drag.world) this.issueGroundOrder(drag.world, drag.shift);
-    this.clearSelection();
+    // Bare ground: order the current selection there. A plain click drops the
+    // selection afterwards; Shift keeps it, which is how StarCraft's
+    // attack-move reads on screen.
+    if (drag.world) this.issueGroundOrder(drag.world);
+    if (!drag.shift) this.clearSelection();
   }
 
   private finishBoxSelect(drag: DragState): void {
-    const corners = this.boxCorners();
-    if (!corners) return;
+    const corners = this.boxCorners(drag);
     const anchor = drag.target && drag.target.pl === this.playerId ? groundPoint(drag.target) : undefined;
     const result = this.selection.selectInRect(
       { x0: corners.a.x, z0: corners.a.z, x1: corners.b.x, z1: corners.b.z },
-      this.getEntities(),
+      this.opts.getEntities(),
       {
         myPlayerId: this.playerId,
         additive: drag.shift,
@@ -732,8 +771,7 @@ export class InputController {
    * live position, re-projected now — that is what makes it survive the
    * camera moving under a held button.
    */
-  private boxCorners(): { a: WorldPoint; b: WorldPoint } | null {
-    const drag = this.drag;
+  private boxCorners(drag: DragState | null = this.drag): { a: WorldPoint; b: WorldPoint } | null {
     if (!drag || drag.button !== 0 || !drag.moved || !drag.world) return null;
     const b = this.groundAt(drag.clientX, drag.clientY);
     if (!b) return null;
@@ -763,22 +801,30 @@ export class InputController {
       );
       return;
     }
+    if (hit) {
+      this.issueGroundOrder(point, queued);
+      return;
+    }
     if (this.nearMineralField(point)) {
       this.issueHarvest();
       return;
     }
-    this.issueGroundOrder(point, false, queued);
+    this.issueGroundOrder(point, queued);
   }
 
-  private issueGroundOrder(point: WorldPoint, attackMove: boolean, queued = false): boolean {
+  /**
+   * A ground order. There is no attack-move command in the protocol, and none
+   * is needed: `Targeting` acquires the nearest reachable enemy for any armed
+   * unit and only downgrades its order when it had none, so a moving unit
+   * shoots whatever walks into range. Shift therefore reaches the same
+   * destination and the behaviour differs only in whether the selection is
+   * dropped.
+   */
+  private issueGroundOrder(point: WorldPoint, queued = false): boolean {
     const units = this.orderUnits();
     if (units.length === 0) return false;
     this.previousOrder = this.lastPatrol;
     this.lastPatrol = point;
-    // The wire protocol has no attack-move: ORDER_MOVE is the only order the
-    // server can act on, so Shift+left-click sends a move and the intent is
-    // carried by the caller, not the wire.
-    void attackMove;
     return this.sendOrder(
       units,
       { c: "move", x: round2(point.x), y: round2(point.z) },
@@ -807,7 +853,7 @@ export class InputController {
   }
 
   private issueHarvest(): boolean {
-    const workers = this.orderUnits().filter((u) => hasEntityDef(u.ty) && entityDef(u.ty).harvest);
+    const workers = this.orderUnits().filter((u) => this.canHarvest(u));
     if (workers.length === 0) return false;
     this.push(workers.map((w) => ({ c: "harvest" as const, worker_id: w.id })));
     return true;
@@ -874,7 +920,7 @@ export class InputController {
     this.push([
       {
         c: "build",
-        worker_id: worker,
+        worker_id: worker.id,
         unit_type: ghost.unitType,
         x: round2(ghost.x),
         y: round2(ghost.z),
@@ -886,14 +932,21 @@ export class InputController {
 
   private placementWorker(): ProtocolEntity | null {
     for (const e of this.orderUnits()) {
-      if (hasEntityDef(e.ty) && entityDef(e.ty).harvest) return e;
+      if (this.canHarvest(e)) return e;
     }
     return null;
   }
 
+  /** True for a roster unit that gathers minerals. */
+  private canHarvest(unit: ProtocolEntity): boolean {
+    if (!hasEntityDef(unit.ty)) return false;
+    const def = entityDef(unit.ty);
+    return def.kind === "unit" && def.harvest != null;
+  }
+
   /** Only structures block a footprint; units get out of the way. */
   private blockedAt(x: number, z: number, radius: number): boolean {
-    for (const e of this.getEntities()) {
+    for (const e of this.opts.getEntities()) {
       if (e.st === "dead" || !hasEntityDef(e.ty)) continue;
       const def = entityDef(e.ty);
       if (def.kind !== "building") continue;
@@ -1020,10 +1073,6 @@ export class InputController {
   /* Entity and selection helpers                                        */
   /* ------------------------------------------------------------------ */
 
-  private getEntities(): ProtocolEntity[] {
-    return this.opts.getEntities();
-  }
-
   private setSelection(ids: number[], additive: boolean): void {
     if (additive) this.selection.add(ids);
     else this.selection.set(ids);
@@ -1041,12 +1090,15 @@ export class InputController {
       this.selection.selectedIds(),
       overflow ?? this.selection.lastOverflow,
     );
+    // A ghost is only placeable with a worker selected and enough minerals, so
+    // it has to be re-judged whenever the selection moves.
+    if (this.pendingPlacement) this.updateGhost(this.pointerGround);
   }
 
   private entityAt(point: WorldPoint): ProtocolEntity | null {
     let best: ProtocolEntity | null = null;
     let bestDistance = Number.POSITIVE_INFINITY;
-    for (const e of this.getEntities()) {
+    for (const e of this.opts.getEntities()) {
       if (e.st === "dead" || !hasEntityDef(e.ty)) continue;
       const p = groundPoint(e);
       const gap = Math.hypot(p.x - point.x, p.z - point.z);
@@ -1057,9 +1109,18 @@ export class InputController {
     return best;
   }
 
-  /** Selected entities we own, alive, and that take field orders. */
+  /**
+   * Selected entities we own, alive, and that take field orders. Snapshots
+   * carry no queue length, so the local mirror is reconciled here: a unit the
+   * server reports as idle with no order has drained everything we queued.
+   */
   private orderUnits(): ProtocolEntity[] {
-    return this.selectedOwn().filter((e) => hasEntityDef(e.ty) && !isBuilding(e.ty));
+    const units = this.selectedOwn().filter((e) => hasEntityDef(e.ty) && !isBuilding(e.ty));
+    for (const unit of units) {
+      if (this.orders.size(unit.id) === 0) continue;
+      if (unit.st === "idle" || (unit.ord ?? 0) === 0) this.orders.clear(unit.id);
+    }
+    return units;
   }
 
   private orderBuildings(): ProtocolEntity[] {
@@ -1068,7 +1129,7 @@ export class InputController {
 
   private selectedOwn(): ProtocolEntity[] {
     const byId = new Map<number, ProtocolEntity>();
-    for (const e of this.getEntities()) byId.set(e.id, e);
+    for (const e of this.opts.getEntities()) byId.set(e.id, e);
     const out: ProtocolEntity[] = [];
     for (const id of this.selection.selectedIds()) {
       const e = byId.get(id);
@@ -1089,19 +1150,19 @@ export class InputController {
   }
 
   private isAliveOwn(id: number): boolean {
-    return this.getEntities().some(
+    return this.opts.getEntities().some(
       (e) => e.id === id && e.st !== "dead" && e.pl === this.playerId,
     );
   }
 
   private isAliveOwn(id: number): boolean {
-    return this.getEntities().some(
+    return this.opts.getEntities().some(
       (e) => e.id === id && e.st !== "dead" && e.pl === this.playerId,
     );
   }
 
   private groundOf(id: number): WorldPoint | null {
-    const e = this.getEntities().find((candidate) => candidate.id === id);
+    const e = this.opts.getEntities().find((candidate) => candidate.id === id);
     return e && e.st !== "dead" ? groundPoint(e) : null;
   }
 

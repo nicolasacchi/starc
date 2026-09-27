@@ -28,7 +28,7 @@
  * Allocation: entity views are pooled and mutated in place, and `out` is reused
  * across frames, so a steady-state frame allocates nothing.
  */
-import { SNAPSHOT_HZ, TICK_MS } from "@shared/protocol";
+import { SNAPSHOT_HZ } from "@shared/protocol";
 import type { EntityState, OrderKind, ProtocolEntity } from "@shared/protocol";
 import type { BufferedSnapshot, SnapshotBuffer } from "./snapshotBuffer";
 
@@ -36,8 +36,6 @@ import type { BufferedSnapshot, SnapshotBuffer } from "./snapshotBuffer";
 export const MAX_EXTRAPOLATION_MS = 250;
 /** Default render delay: two snapshot intervals of interpolation headroom. */
 export const DEFAULT_INTERPOLATION_DELAY_MS = (1000 / SNAPSHOT_HZ) * 2;
-/** Nominal spacing between snapshots, used to sanity-check the render clock. */
-export const EXPECTED_SNAPSHOT_INTERVAL_MS = 1000 / SNAPSHOT_HZ;
 
 /** A blended view of one entity, in the shape the renderer consumes. */
 export interface InterpolatedEntity {
@@ -82,6 +80,11 @@ export interface WorldSample {
   nextTick: number;
   /** Blend factor actually applied, in [0, 1]. */
   alpha: number;
+  /**
+   * The interpolator's live entity map. It is assigned by `sample()`, is valid
+   * until the next call, and is never copied — renderers iterate it directly,
+   * and a caller that needs to keep a frame must copy what it reads.
+   */
   entities: Map<number, InterpolatedEntity>;
   /** Ids that entered the world in this sample. */
   spawnIds: number[];
@@ -328,7 +331,7 @@ export class Interpolator {
       tid: source.tid ?? 0,
       ord: source.ord ?? 0,
       ox: source.ox ?? 0,
-      oy: source.oy ?? 0,
+      oz: source.oz ?? 0,
       prog: source.prog ?? 0,
       cargo: source.cargo ?? 0,
       res: source.res ?? 0,
@@ -362,7 +365,7 @@ function copyVolatile(view: InterpolatedEntity, source: ProtocolEntity): void {
   view.tid = source.tid ?? 0;
   view.ord = source.ord ?? 0;
   view.ox = source.ox ?? 0;
-  view.oy = source.oy ?? 0;
+  view.oz = source.oz ?? 0;
   view.cargo = source.cargo ?? 0;
   view.res = source.res ?? 0;
   view.n = source.n ?? 0;
@@ -374,5 +377,3 @@ function clamp01(value: number): number {
   return value < 0 ? 0 : value > 1 ? 1 : value;
 }
 
-/** One simulation step, re-exported so callers can size prediction substeps. */
-export const INTERPOLATION_TICK_MS = TICK_MS;

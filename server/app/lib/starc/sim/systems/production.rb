@@ -83,7 +83,7 @@ module Starc
           end
           world.emit(
             "e" => "built", "id" => unit.id, "ty" => unit.type_key,
-            "x" => round3(unit.x), "y" => round3(unit.z), "z" => round3(unit.z_world)
+            "x" => round3(unit.x), "z" => round3(unit.z), "y" => round3(unit.z_world)
           )
           unit
         end

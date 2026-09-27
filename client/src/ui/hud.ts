@@ -17,7 +17,7 @@ import type { BuildMenu } from "./buildMenu";
 import { entityIcon, resourceIcon } from "./icons";
 import type { MinimapUi } from "./minimapUi";
 import type { UnitPanel } from "./unitPanel";
-import type { AlertKind, CommandSlot, HudCallbacks, QueueItem, SupplyReadout } from "./uiTypes";
+import type { AlertKind, CommandSlot, HudCallbacks, Meter, QueueItem, SupplyReadout, TimerHandle } from "./uiTypes";
 import { Teardown, button, clear, docOf, el, fmtInt, listen, meter, raceOf } from "./uiTypes";
 
 export interface HudOptions {
@@ -47,20 +47,19 @@ const COMMAND_SLOTS = 9;
 export class Hud {
   private readonly teardown = new Teardown();
   private readonly callbacks: HudCallbacks;
-  private readonly children: { minimap?: MinimapUi; unitPanel?: UnitPanel; buildMenu?: BuildMenu };
+  private readonly children: { minimap?: MinimapUi; unitPanel?: UnitPanel; buildMenu?: BuildMenu; race: Race };
   private root: HTMLElement | null = null;
   private mineralsNode: HTMLElement | null = null;
   private vespeneNode: HTMLElement | null = null;
   private supplyNode: HTMLElement | null = null;
-  private supplyBar: ReturnType<typeof meter> | null = null;
+  private supplyBar: Meter | null = null;
   private supplyChip: HTMLElement | null = null;
   private matchNode: HTMLElement | null = null;
   private alertsNode: HTMLElement | null = null;
   private portraitIcon: HTMLElement | null = null;
   private portraitName: HTMLElement | null = null;
-  private portraitHp: ReturnType<typeof meter> | null = null;
+  private portraitHp: Meter | null = null;
   private portraitHpText: HTMLElement | null = null;
-  private slotsNode: HTMLElement | null = null;
   private pageNode: HTMLElement | null = null;
   private cardQueue: HTMLElement | null = null;
   private selectionNode: HTMLElement | null = null;
@@ -68,8 +67,7 @@ export class Hud {
   private page = 0;
   private pages = 1;
   private slots: readonly CommandSlot[] = [];
-  private rallyId: number | null = null;
-  private alertTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
+  private alertTimers = new Map<HTMLElement, TimerHandle>();
 
   constructor(callbacks: HudCallbacks, options: HudOptions = {}) {
     this.callbacks = callbacks;
@@ -77,6 +75,7 @@ export class Hud {
       minimap: options.minimap,
       unitPanel: options.unitPanel,
       buildMenu: options.buildMenu,
+      race: options.race ?? "terran",
     };
   }
 
@@ -100,7 +99,7 @@ export class Hud {
 
     /* Resource bar ------------------------------------------------------ */
     const resources = el(doc, "header", "hud__resources panel");
-    const mineralChip = this.chip(doc, "minerals", () => this.callbacks.onSelectWorker?.(0));
+    const mineralChip = this.chip(doc, "minerals", () => this.callbacks.onSelectWorker?.());
     const vespeneChip = this.chip(doc, "vespene");
     const supplyChip = this.chip(doc, "supply");
     const supplyBar = meter(doc, "meter--supply", "supply");
@@ -141,7 +140,6 @@ export class Hud {
     this.portraitHpText = portraitHpText;
 
     const slots = el(doc, "div", "card__slots");
-    this.slotsNode = slots;
     for (let i = 0; i < COMMAND_SLOTS; i += 1) slots.append(this.renderSlot(doc, i));
 
     const footer = el(doc, "div", "card__footer");
@@ -274,7 +272,6 @@ export class Hud {
 
   /** Highlights the building whose rally point is being placed. */
   setRallyMode(buildingId: number | null): void {
-    this.rallyId = buildingId;
     this.children.unitPanel?.setRallyArmed(buildingId);
     for (const card of this.cards) card.node.classList.toggle("is-rally", buildingId !== null);
     this.root?.classList.toggle("is-rallying", buildingId !== null);
@@ -286,7 +283,7 @@ export class Hud {
     const host = this.alertsNode;
     if (doc === null || host === null) return;
     const node = el(doc, "div", `feed feed--${kind}`, text);
-    host.prepend(node);
+    host.insertBefore(node, host.firstChild);
     const timer = setTimeout(() => {
       node.classList.add("is-leaving");
       this.alertTimers.delete(node);
@@ -317,8 +314,13 @@ export class Hud {
     return this.root?.ownerDocument ?? null;
   }
 
-  private chip(doc: Document, kind: "minerals" | "vespene" | "supply", onClick?: () => void): { node: HTMLDivElement; value: HTMLElement } {
-    const node = el(doc, onClick === undefined ? "div" : "button", `chip chip--${kind}`);
+  private chip(
+    doc: Document,
+    kind: "minerals" | "vespene" | "supply",
+    onClick?: () => void,
+  ): { node: HTMLElement; value: HTMLElement } {
+    const node: HTMLElement =
+      onClick === undefined ? el(doc, "div", `chip chip--${kind}`) : el(doc, "button", `chip chip--${kind}`);
     if (onClick !== undefined) {
       (node as HTMLButtonElement).type = "button";
       node.title = "Select a worker";

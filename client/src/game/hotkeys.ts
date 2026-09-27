@@ -65,7 +65,7 @@ const DEFAULT_BINDINGS: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** Actions that mean "the camera moved" — these also fire on key-up. */
-const CAMERA_ACTIONS: ReadonlySet<string> = new Set<HotkeyAction>([
+export const CAMERA_ACTIONS: ReadonlySet<HotkeyAction> = new Set<HotkeyAction>([
   "camera_left",
   "camera_right",
   "camera_up",
@@ -128,19 +128,24 @@ export type HotkeyEmitter = (action: HotkeyAction, ctx: HotkeyContext) => boolea
 export interface HotkeyOptions {
   /** Race whose roster supplies the train/build letters. */
   race?: Race;
+  /**
+   * Consulted on the first keypress when no race is known yet. A caller that
+   * only holds a snapshot can look the race up from the first entity that
+   * belongs to us, which is why the letters can never be stale.
+   */
+  resolveRace?: () => Race | null;
   /** Clock for the group double-tap window; defaults to the event timestamp. */
   now?: () => number;
   /** Extra veto, e.g. "a chat box has focus". */
   ignore?: (event: KeyboardEvent) => boolean;
 }
 
+/** `Digit4` and `Numpad4` both mean control group 4; anything else is null. */
 function digitOf(code: string): number | null {
-  if (code.startsWith("Digit")) return code.charCodeAt(5) - 48;
-  if (code.startsWith("Numpad") && code.length === 7) {
-    const d = code.charCodeAt(6) - 48;
-    return d >= 0 && d <= 9 ? d : null;
-  }
-  return null;
+  const index = code.startsWith("Digit") ? 5 : code.startsWith("Numpad") ? 6 : -1;
+  if (index < 0 || code.length !== index + 1) return null;
+  const digit = code.charCodeAt(index) - 48;
+  return digit >= 0 && digit <= 9 ? digit : null;
 }
 
 export class HotkeyManager {
@@ -182,6 +187,11 @@ export class HotkeyManager {
     if (this.opts.ignore?.(event) === true) return false;
     if (this.targetIsTextEntry(event)) return false;
 
+    if (this.race === null && this.opts.resolveRace) {
+      const race = this.opts.resolveRace();
+      if (race) this.setRace(race);
+    }
+
     const group = digitOf(event.code);
     if (group !== null) {
       if (event.type === "keyup" || event.repeat) return true;
@@ -191,7 +201,7 @@ export class HotkeyManager {
 
     const actions = this.bindings.get(event.code);
     if (!actions || actions.length === 0) return false;
-    const ctx = this.context(event, null, null);
+    const ctx = this.context(event, null);
 
     if (event.type === "keyup") {
       // Only the camera cares about a release; everything else already fired.
@@ -199,6 +209,9 @@ export class HotkeyManager {
       if (camera) this.emitter(camera, ctx);
       return true;
     }
+    // Auto-repeat would queue five marines a second; a held key is already
+    // registered, and the camera is driven by its own frame loop.
+    if (event.repeat) return true;
 
     for (const action of actions) {
       if (this.placing && action.startsWith("build:")) {
@@ -207,7 +220,7 @@ export class HotkeyManager {
         if (this.emitter("placement_key", { ...ctx, entity: action.slice(6) })) return true;
         continue;
       }
-      if (this.emitter(action as HotkeyAction, ctx)) return true;
+      if (this.emitter(action, ctx)) return true;
     }
     return true;
   }
@@ -270,7 +283,7 @@ export class HotkeyManager {
   }
 
   private handleGroup(group: number, event: KeyboardEvent): void {
-    const ctx = this.context(event, group, null);
+    const ctx = this.context(event, group);
     if (event.ctrlKey) {
       this.emitter("assign_group", ctx);
       return;
@@ -287,7 +300,7 @@ export class HotkeyManager {
     if (isDouble) this.emitter("centre_group", ctx);
   }
 
-  private context(event: KeyboardEvent, group: number | null, entity: string | null): HotkeyContext {
+  private context(event: KeyboardEvent, group: number | null): HotkeyContext {
     return {
       event,
       code: event.code,
@@ -296,7 +309,7 @@ export class HotkeyManager {
       shift: event.shiftKey,
       alt: event.altKey,
       group,
-      entity,
+      entity: null,
       count: event.shiftKey ? 5 : 1,
     };
   }

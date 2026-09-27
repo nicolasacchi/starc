@@ -153,7 +153,7 @@ module Starc
           end
           e.order = nxt["order"]
           e.order_x = nxt["x"]
-          e.order_z = nxt["y"]
+          e.order_z = nxt["z"]
           case e.order
           when ORDER_ATTACK
             e.target_id = nxt["target_id"]

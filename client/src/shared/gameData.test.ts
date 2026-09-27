@@ -164,7 +164,7 @@ describe("shared game data", () => {
       for (const p of m.start_positions) {
         expect(p.x, m.id).toBeGreaterThanOrEqual(0);
         expect(p.x, m.id).toBeLessThanOrEqual(m.size);
-        expect(p.z ?? p.y, m.id).toBeGreaterThanOrEqual(0);
+        expect(p.z, m.id).toBeGreaterThanOrEqual(0);
       }
       expect(m.lighting.time_of_day, m.id).toBeGreaterThanOrEqual(0);
       expect(m.lighting.time_of_day, m.id).toBeLessThanOrEqual(1);
@@ -177,9 +177,9 @@ describe("shared game data", () => {
     for (const m of GAME.maps) {
       for (const start of m.start_positions) {
         const nearest = Math.min(
-          ...m.mineral_clusters.map((c) => Math.hypot(c.x - start.x, (c.y ?? 0) - start.y)),
+          ...m.mineral_clusters.map((c) => Math.hypot(c.x - start.x, c.z - start.z)),
         );
-        expect(nearest, `${m.id} start (${start.x}, ${start.y})`).toBeLessThan(20);
+        expect(nearest, `${m.id} start (${start.x}, ${start.z})`).toBeLessThan(20);
       }
     }
   });

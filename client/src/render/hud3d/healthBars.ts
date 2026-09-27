@@ -89,7 +89,6 @@ interface BarState {
   stamp: number;
   hp: number;
   shield: number;
-  shieldMax: number;
   /** Lagging copy of the hp fraction; always >= the real one. */
   trail: number;
   shieldTrail: number;
@@ -99,9 +98,10 @@ interface BarState {
 
 function hpColor(fraction: number, out: THREE.Color): void {
   const f = Math.max(0, Math.min(1, fraction));
-  const srgb = THREE.SRGBColorSpace;
-  if (f > 0.5) out.setRGB(1, (f - 0.5) * 2, 0.1, srgb);
-  else out.setRGB(1, f * 1.55, 0.06, srgb);
+  // Red at zero, amber around half, green at full — continuous, so the bar
+  // never jumps colour as a hit lands.
+  const green = f <= 0.5 ? f * 1.6 : (f - 0.5) * 2;
+  out.setRGB(1, green, 0.08, THREE.SRGBColorSpace);
 }
 
 function makeLayer(capacity: number, plate: boolean): BarLayer {
@@ -241,7 +241,6 @@ export class HealthBars {
           stamp,
           hp: rawHp,
           shield: rawShield,
-          shieldMax: view.shieldMax,
           trail: rawHp,
           shieldTrail: rawShield,
           alpha: 0,
@@ -258,7 +257,6 @@ export class HealthBars {
       const ease = Math.min(1, dt * 22);
       state.hp += (rawHp - state.hp) * ease;
       state.shield += (rawShield - state.shield) * ease;
-      state.shieldMax = view.shieldMax;
       if (state.hp < state.trail) state.trail = Math.max(state.hp, state.trail - TRAIL_RATE * dt);
       else state.trail = state.hp;
       if (state.shield < state.shieldTrail) {
@@ -321,12 +319,12 @@ export class HealthBars {
     commit(trail, trailN);
     commit(hp, hpN);
     commit(shield, shieldN);
-
-    // Retire bars of entities that no longer exist, but only after they have
-    // finished fading so a dying unit's bar does not pop.
+    // Retire the memory of bars that were not fed this frame — the entity is
+    // gone, or it is far outside the draw distance and will re-initialise when
+    // it comes back. Swept in batches so the map does not grow forever.
     if ((this.stamp & 63) === 0) {
       for (const [id, state] of this.states) {
-        if (state.stamp !== stamp && state.alpha === 0) this.states.delete(id);
+        if (state.stamp !== stamp) this.states.delete(id);
       }
     }
   }

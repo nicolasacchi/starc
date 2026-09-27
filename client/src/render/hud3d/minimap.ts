@@ -289,17 +289,17 @@ export class Minimap {
         fillDisc(
           px, res,
           (cluster.x + Math.cos(a) * spread) * toPx,
-          (cluster.y + Math.sin(a) * spread) * toPx,
+          (cluster.z + Math.sin(a) * spread) * toPx,
           1.5, r, g, b, 0.85,
         );
       }
     }
     for (const spot of this.map.expansion_candidates) {
-      strokeDisc(px, res, spot.x * toPx, spot.y * toPx, 3.5, 200, 210, 230, 0.3);
+      strokeDisc(px, res, spot.x * toPx, spot.z * toPx, 3.5, 200, 210, 230, 0.3);
     }
     for (const start of this.map.start_positions) {
-      strokeDisc(px, res, start.x * toPx, start.y * toPx, 3, 235, 235, 235, 0.55);
-      fillDisc(px, res, start.x * toPx, start.y * toPx, 1.4, 235, 235, 235, 0.5);
+      strokeDisc(px, res, start.x * toPx, start.z * toPx, 3, 235, 235, 235, 0.55);
+      fillDisc(px, res, start.x * toPx, start.z * toPx, 1.4, 235, 235, 235, 0.5);
     }
   }
 

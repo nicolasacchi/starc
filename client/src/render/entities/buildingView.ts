@@ -25,7 +25,7 @@ import * as THREE from "three";
 
 import type { MapDef, OrderKind, Race } from "@shared/protocol";
 import type { QualitySettings } from "@render/core/quality";
-import { entityDef } from "@shared/gameData";
+import { RACES, entityDef } from "@shared/gameData";
 import { materialFor } from "@render/materials/materialLibrary";
 import { buildingGeometry } from "@render/geometry/buildingGeometry";
 import { heightField } from "@render/terrain/heightfield";
@@ -39,6 +39,19 @@ const SMOKE_COUNT = 10;
 const RING_RADIUS = 0.86;
 const SMOKE_HP_STAGE = 0.5;
 const CRITICAL_HP_STAGE = 0.25;
+
+/**
+ * Buildings whose merged geometry already ships a permanent mast, radar dish
+ * or flare stack. Adding corner scaffolding around those would read as a
+ * second, meaningless pole, so construction on them shows the rising shell,
+ * dust and the progress bar only.
+ */
+const NO_SCAFFOLD: Record<string, true> = {
+  command_center: true,
+  starport: true,
+  robotics_facility: true,
+  refinery: true,
+};
 
 const PUFF_VERT = /* glsl */ `
 attribute float aAlpha;
@@ -103,8 +116,9 @@ let sharedPuffTexture: THREE.DataTexture | null = null;
 let sharedBarBackMaterial: THREE.MeshBasicMaterial | null = null;
 let sharedBarFillMaterial: THREE.MeshBasicMaterial | null = null;
 let sharedScorchMaterial: THREE.MeshBasicMaterial | null = null;
-let sharedPoleMaterial: THREE.MeshBasicMaterial | null = null;
-let sharedFlagMaterial: THREE.MeshBasicMaterial | null = null;
+let sharedPoleMaterial: THREE.MeshStandardMaterial | null = null;
+/** One rally-flag material per race; three for the whole process. */
+const flagMaterials: Partial<Record<Race, THREE.MeshBasicMaterial>> = {};
 
 /** Releases the primitives, textures and materials every building view shares. */
 export function disposeBuildingViewShared(): void {
@@ -122,8 +136,10 @@ export function disposeBuildingViewShared(): void {
   sharedScorchMaterial = null;
   sharedPoleMaterial?.dispose();
   sharedPoleMaterial = null;
-  sharedFlagMaterial?.dispose();
-  sharedFlagMaterial = null;
+  for (const race of RACES) {
+    flagMaterials[race]?.dispose();
+    delete flagMaterials[race];
+  }
 }
 
 function cube(): THREE.BoxGeometry {
@@ -194,7 +210,7 @@ function scorchMaterial(): THREE.MeshBasicMaterial {
   return sharedScorchMaterial;
 }
 
-function poleMaterial(): THREE.MeshBasicMaterial {
+function poleMaterial(): THREE.MeshStandardMaterial {
   if (sharedPoleMaterial === null) {
     sharedPoleMaterial = new THREE.MeshStandardMaterial({ color: 0x8a8f98, roughness: 0.7, metalness: 0.4 });
   }
@@ -211,8 +227,6 @@ function flagMaterial(race: Race): THREE.MeshBasicMaterial {
   }
   return flagMaterials[race] as THREE.MeshBasicMaterial;
 }
-
-const flagMaterials: Partial<Record<Race, THREE.MeshBasicMaterial>> = {};
 
 /** One instanced puff emitter (construction dust or damage smoke). */
 interface PuffField {
@@ -231,16 +245,13 @@ function makePuffField(count: number, color: number): PuffField {
   const owned = geometry.clone();
   owned.setAttribute("aAlpha", alphaAttribute);
   const material = new THREE.ShaderMaterial({
-function flagMaterial(race: Race): THREE.MeshBasicMaterial {
-  // One material per race: three for the whole process.
-  if (flagMaterials[race] === undefined) {
-    const color = race === "terran" ? 0x4ad66a : race === "zerg" ? 0xd03a30 : 0xf5e05a;
-    flagMaterials[race] = new THREE.MeshBasicMaterial({
-      color, side: THREE.DoubleSide, transparent: true, opacity: 0.92, toneMapped: false,
-    });
-  }
-  return flagMaterials[race] as THREE.MeshBasicMaterial;
-}
+    vertexShader: PUFF_VERT,
+    fragmentShader: PUFF_FRAG,
+    uniforms: {
+      uMap: { value: puffTexture() },
+      uColor: { value: new THREE.Color(color, THREE.SRGBColorSpace) },
+    },
+    transparent: true,
     depthWrite: false,
     toneMapped: false,
     side: THREE.DoubleSide,
@@ -257,6 +268,8 @@ export class BuildingView extends AbstractEntityView {
   private readonly terrain: HeightField;
   private readonly model: THREE.Group;
   private readonly scaffold: THREE.Group;
+  /** False for buildings whose geometry already carries a mast or dish. */
+  private readonly hasScaffold: boolean;
   private readonly dust: PuffField;
   private readonly smoke: PuffField;
   private readonly barHolder: THREE.Group;
@@ -270,6 +283,7 @@ export class BuildingView extends AbstractEntityView {
   private readonly scorch: THREE.Mesh;
 
   private readonly puffDummy = new THREE.Object3D();
+  private readonly groupQuat = new THREE.Quaternion();
   private camera: THREE.Camera | null = null;
   private progress = 1;
   private rallyX = 0;
@@ -292,7 +306,10 @@ export class BuildingView extends AbstractEntityView {
     this.model = model;
 
     // Scaffolding: four corner poles and two rails, scaled to the footprint.
+    // Skipped where the merged geometry already ships a permanent mast.
+    this.hasScaffold = NO_SCAFFOLD[def.key] !== true;
     const scaffold = new THREE.Group();
+    const poleHeight = this.height * 1.05;
     const inset = this.radius * 0.85;
     const poleThickness = Math.max(0.06, this.radius * 0.07);
     for (const sx of [-1, 1]) {
@@ -384,6 +401,7 @@ export class BuildingView extends AbstractEntityView {
     }
     this.scaffold.visible = false;
     this.barHolder.visible = false;
+    this.dust.mesh.visible = false;
     this.smoke.mesh.visible = false;
   }
 
@@ -441,10 +459,9 @@ export class BuildingView extends AbstractEntityView {
 
     this.model.scale.set(1, Math.max(0.02, eased), 1);
     this.model.position.y = -(1 - eased) * this.height;
-    this.model.visible = true;
 
-    this.scaffold.visible = underConstruction;
-    if (underConstruction) {
+    this.scaffold.visible = underConstruction && this.hasScaffold;
+    if (this.scaffold.visible) {
       const fade = Math.max(0.05, 1 - this.progress);
       this.scaffold.scale.setScalar(0.6 + 0.4 * (1 - fade));
     }
@@ -452,8 +469,11 @@ export class BuildingView extends AbstractEntityView {
     // Billboarded construction bar.
     this.barHolder.visible = underConstruction;
     if (underConstruction && this.camera !== null) {
+      // Billboard against the world camera, undoing the group's own yaw so the
+      // bar stays flat to the screen even if the shell is rotated.
       this.camera.getWorldQuaternion(this.cameraQuat);
-      this.barHolder.quaternion.copy(this.cameraQuat);
+      this.group.getWorldQuaternion(this.groupQuat);
+      this.barHolder.quaternion.copy(this.groupQuat).invert().multiply(this.cameraQuat);
       const width = this.barBack.scale.x;
       const fillWidth = width * eased;
       this.barFill.scale.x = fillWidth;

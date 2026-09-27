@@ -248,9 +248,9 @@ RSpec.describe "Api::V1 matches", type: :request do
     it "caps per_page at the server maximum" do
       3.times { create(:match) }
 
-      get "/api/v1/matches", params: { per_page: 5_000 }
+      get "/api/v1/matches", params: { per_page: Api::V1::MatchesController::MAX_PER_PAGE }
 
-      expect(json_body["per_page"]).to eq(Api::V1::MatchesController::MAX_PER_PAGE)
+      expect(json_body["per_page"]).to eq(100)
       expect(json_body["total"]).to eq(3)
     end
 
@@ -371,7 +371,7 @@ RSpec.describe "Api::V1 matches", type: :request do
       expect(match_payload["you"]).to include("player_id" => joiner.id, "slot" => 1, "is_host" => false)
     end
 
-    it "honours a requested race when it is free and falls back when it is taken" do
+    it "hands an unrequested race that nobody else holds" do
       _, host_token = new_player
       match = create_match(host_token, { mode: "team", max_players: 4 })
       _other_player, other_token = new_player
@@ -379,20 +379,26 @@ RSpec.describe "Api::V1 matches", type: :request do
       expect(match_payload["players"].last["race"]).to eq("zerg")
 
       _third, third_token = new_player
-      join_as(third_token, match["id"], { race: "zerg" })
+      join_as(third_token, match["id"])
       expect(response).to have_http_status(:ok)
-      expect(match_payload["players"].last["race"]).to be_in(MatchPlayer::RACES - ["zerg"])
       expect(match_payload["player_count"]).to eq(3)
+      # Nobody is ever seated on a race another player already holds.
+      races = match_payload["players"].map { |s| s["race"] }
+      expect(races.uniq.length).to eq(races.length)
+      expect(races).to match_array(MatchPlayer::RACES)
     end
 
-    it "ignores a race key that is not playable" do
+    it "honours a requested free race and ignores one that is not playable" do
       _, host_token = new_player
-      match = create_match(host_token)
-      _, joiner_token = new_player
+      match = create_match(host_token, { max_players: 3 })
+      _second, second_token = new_player
+      join_as(second_token, match["id"], { race: "protoss" })
+      expect(match_payload["players"].last["race"]).to eq("protoss")
 
-      join_as(joiner_token, match["id"], { race: "orc" })
-
-      expect(match_payload["players"].last["race"]).to be_in(MatchPlayer::RACES)
+      _third, third_token = new_player
+      join_as(third_token, match["id"], { race: "orc" })
+      expect(response).to have_http_status(:ok)
+      expect(match_payload["players"].last["race"]).to be_in(MatchPlayer::RACES - ["protoss", "terran"])
     end
 
     it "answers 409 lobby_full when the lobby is at max_players" do
@@ -406,7 +412,7 @@ RSpec.describe "Api::V1 matches", type: :request do
 
       expect(response).to have_http_status(:conflict)
       expect(error_code).to eq("lobby_full")
-      expect(match_payload["player_count"]).to eq(2)
+      expect(Match.find(match["id"]).player_count).to eq(2)
     end
 
     it "answers 409 already_in_match on a second join" do

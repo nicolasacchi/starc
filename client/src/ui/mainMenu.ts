@@ -106,7 +106,7 @@ export class MainMenu {
     const tabRow = el(doc, "div", "tabs");
     this.tabs = [this.makeTab("login", "Log in"), this.makeTab("register", "Create account")];
     for (const tab of this.tabs) tabRow.append(tab);
-    this.nameField = field(
+    const nameField = field(
       doc,
       {
         id: "menu-name",
@@ -117,7 +117,8 @@ export class MainMenu {
         hint: NAME_ERROR,
       },
     );
-    this.passwordField = field(
+    this.nameField = nameField;
+    const passwordField = field(
       doc,
       {
         id: "menu-password",
@@ -128,13 +129,14 @@ export class MainMenu {
         hint: PASSWORD_ERROR,
       },
     );
+    this.passwordField = passwordField;
     const formError = el(doc, "p", "menu__formerror");
     formError.setAttribute("role", "alert");
     const submit = el(doc, "button", "btn btn--primary", "Log in");
     submit.type = "submit";
     this.formError = formError;
     this.submitButton = submit;
-    authPanel.append(tabRow, this.nameField.row, this.passwordField.row, formError, submit);
+    authPanel.append(tabRow, nameField.row, passwordField.row, formError, submit);
     this.wireValidation();
     listen(
       authPanel,

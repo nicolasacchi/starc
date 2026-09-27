@@ -381,9 +381,13 @@ export function hazardStripeTexture(size = 64, opts: HazardOptions = {}): THREE.
 export type GradientStop = readonly [number, number];
 
 export interface GradientRampOptions {
-  /** Ramp runs top-to-bottom instead of bottom-to-top. */
+  /** Ramp runs bottom-to-top instead of top-to-bottom. */
   flip?: boolean;
-  size?: number;
+}
+
+interface RampStop {
+  at: number;
+  color: THREE.Color;
 }
 
 /**
@@ -398,18 +402,17 @@ export function gradientRamp(
   if (stops.length === 0) throw new Error("gradientRamp(): at least one stop is required");
   const key = `ramp:${size}:${opts.flip ? 1 : 0}:${stops.map((s) => `${s[0]}:${s[1]}`).join(",")}`;
   return cached(key, size, THREE.SRGBColorSpace, (bytes, n) => {
-    const sorted = [...stops].sort((p, q) => p[0] - q[0]).map((s) => ({
-      at: s[0],
-      color: new THREE.Color(s[1]),
-    }));
+    const sorted: RampStop[] = [...stops]
+      .sort((p, q) => p[0] - q[0])
+      .map((s) => ({ at: s[0], color: new THREE.Color(s[1]) }));
     const last = sorted.length - 1;
     for (let y = 0; y < n; y++) {
       const t = opts.flip ? y / (n - 1) : 1 - y / (n - 1);
-      let lo = sorted[0] as { at: number; color: THREE.Color };
-      let hi = sorted[last] as { at: number; color: THREE.Color };
+      let lo = sorted[0] as RampStop;
+      let hi = sorted[last] as RampStop;
       for (let i = 0; i < last; i++) {
-        const from = sorted[i] as { at: number; color: THREE.Color };
-        const to = sorted[i + 1] as { at: number; color: THREE.Color };
+        const from = sorted[i] as RampStop;
+        const to = sorted[i + 1] as RampStop;
         if (t >= from.at && t <= to.at) {
           lo = from;
           hi = to;

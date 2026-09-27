@@ -91,7 +91,6 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-
 /** An enemy is only a legal selection target when it is a combat unit. */
 function isAttackableUnit(e: ProtocolEntity): boolean {
   if (!hasEntityDef(e.ty)) return false;

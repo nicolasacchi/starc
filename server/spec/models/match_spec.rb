@@ -3,6 +3,12 @@
 require "rails_helper"
 
 RSpec.describe Match do
+  # Reads the column straight out of SQLite so the assertion is about what was
+  # actually stored, not about ActiveRecord's enum casting.
+  def stored_status(model)
+    ActiveRecord::Base.connection.select_value("SELECT status FROM matches WHERE id = #{model.id}")
+  end
+
   def seat(match, slot)
     match.match_players.find_by!(slot: slot)
   end
@@ -17,8 +23,8 @@ RSpec.describe Match do
       it "stores #{name} as status #{value}" do
         match = create(:match, status: name, ended_at: Time.current)
         expect(match.reload.status).to eq(name.to_s)
-        expect(match).to be_public_send("#{name}?")
-        expect(Match.where(id: match.id).pick(:status)).to eq(value)
+        expect(match.public_send("#{name}?")).to be(true)
+        expect(stored_status(match)).to eq(value)
       end
     end
 
@@ -333,17 +339,18 @@ RSpec.describe Match do
   end
 
   describe "#finish!" do
-    let(:match) { create(:match, :in_progress, started_at: 2.minutes.ago) }
+    let(:started_at) { Time.utc(2026, 9, 27, 10, 0, 0) }
+    let(:match) { create(:match, :in_progress, started_at: started_at) }
     let(:winner) { create(:player) }
 
     it "records the outcome, the reason, the end time and the duration" do
-      match.finish!(winner_player_id: winner.id, reason: "forfeit", ended_at: 1.minute.ago)
+      match.finish!(winner_player_id: winner.id, reason: "forfeit", ended_at: started_at + 60)
 
       match.reload
       expect(match).to be_finished
       expect(match.winner_player_id).to eq(winner.id)
       expect(match.end_reason).to eq("forfeit")
-      expect(match.ended_at).to be_within(1.second).of(1.minute.ago)
+      expect(match.ended_at).to eq(started_at + 60)
       expect(match.duration_ms).to eq(60_000)
     end
 

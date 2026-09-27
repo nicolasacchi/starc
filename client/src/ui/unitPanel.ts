@@ -204,7 +204,7 @@ export class UnitPanel {
   setRallyArmed(buildingId: number | null): void {
     const actions = this.actionsNode;
     if (actions === null) return;
-    for (const node of Array.from(actions.children)) {
+    for (const node of actions.querySelectorAll<HTMLElement>("[data-building]")) {
       node.classList.toggle("is-armed", buildingId !== null && node.dataset.building === String(buildingId));
     }
   }
@@ -246,7 +246,6 @@ export class UnitPanel {
     const race = raceOf(primary.ty);
     if (this.raceBar !== null) {
       this.raceBar.style.background = accentFor(race);
-      this.raceBar.dataset.relation = this.relation;
     }
     if (this.titleNode !== null) {
       this.titleNode.textContent =

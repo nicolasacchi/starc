@@ -53,12 +53,18 @@ RSpec.describe Session do
       expect(described_class.live).to contain_exactly(live)
     end
 
-    it "treats a session expiring exactly now as live" do
-      freeze = Time.current
-      session = create(:session, expires_at: freeze)
-      travel_to freeze do
+    it "flips from live to dead exactly at the expiry" do
+      boundary = Time.utc(2026, 9, 27, 12, 0, 0)
+      session = create(:session, expires_at: boundary)
+
+      travel_to(boundary - 1.second) do
+        expect(session.active?).to be(true)
         expect(described_class.live).to include(session)
+      end
+
+      travel_to(boundary + 1.second) do
         expect(session.active?).to be(false)
+        expect(described_class.live).not_to include(session)
       end
     end
   end

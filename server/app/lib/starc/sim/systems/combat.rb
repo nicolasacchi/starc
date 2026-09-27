@@ -50,8 +50,8 @@ module Starc
           target_z = world.height_for(target) + (target.height * IMPACT_FRACTION)
           world.emit(
             "e" => "shot", "id" => shooter.id,
-            "x" => round3(shooter.x), "y" => round3(shooter.z), "z" => round3(shooter_z),
-            "tx" => round3(target.x), "ty" => round3(target.z), "tz" => round3(target_z)
+            "x" => round3(shooter.x), "z" => round3(shooter.z), "y" => round3(shooter_z),
+            "tx" => round3(target.x), "tz" => round3(target.z), "ty" => round3(target_z)
           )
 
           splash = weapon["splash"]

@@ -39,6 +39,7 @@ export type BurstKind =
   | "flame"
   | "debris"
   | "energy"
+  | "plasma"
   | "mist";
 
 export interface ParticleSpawn {
@@ -82,7 +83,7 @@ export interface BurstOptions {
   spread?: number;
   /** Extra bias along +Y, added after the cone. */
   upBias?: number;
-  /** Velocity every particle inherits (a moving vehicle, a shockwave). */
+  /** Velocity every particle inherits, added on top of the emitted speed. */
   inherit?: THREE.Vector3;
   life?: number;
   lifeVariance?: number;
@@ -175,6 +176,12 @@ const PRESETS: Readonly<Record<BurstKind, BurstPreset>> = {
     color: 0xffffff, colorEnd: 0x66ccff, gravity: 0, drag: 3, spin: 0,
     mode: "additive", turbulence: 0, fade: 1, brightness: 1.8,
   },
+  plasma: {
+    speed: 11, speedVariance: 0.45, radius: 0.1, spread: Math.PI, upBias: 0.3,
+    life: 0.45, lifeVariance: 0.35, size: 0.42, sizeEnd: 0.08, sizeCurve: "ease-out",
+    color: 0xdff4ff, colorEnd: 0x3a7bff, gravity: -1, drag: 2.4, spin: 0,
+    mode: "additive", turbulence: 0.08, fade: 1.3, brightness: 2,
+  },
   mist: {
     speed: 1.1, speedVariance: 0.7, radius: 1.2, spread: Math.PI, upBias: 0.2,
     life: 3.2, lifeVariance: 0.4, size: 1.6, sizeEnd: 4.2, sizeCurve: "grow",
@@ -190,6 +197,7 @@ const _basisA = new THREE.Vector3();
 const _basisB = new THREE.Vector3();
 const _direction = new THREE.Vector3();
 const _offset = new THREE.Vector3();
+const _velocity = new THREE.Vector3();
 
 /**
  * A unit quad drawn once per instance. The caller attaches its own instanced
@@ -542,6 +550,11 @@ export class ParticleSystem {
     this.colorEnds[i3] = _colorEnd.r;
     this.colorEnds[i3 + 1] = _colorEnd.g;
     this.colorEnds[i3 + 2] = _colorEnd.b;
+
+    this.params[i4] = this.time;
+    this.params[i4 + 1] = options.life;
+    this.params[i4 + 2] = options.size;
+    this.params[i4 + 3] = options.sizeEnd ?? options.size;
     this.motion[i4] = options.gravity ?? 0;
     this.motion[i4 + 1] = options.drag ?? 0;
     this.motion[i4 + 2] = options.spin ?? 0;
@@ -559,37 +572,40 @@ export class ParticleSystem {
   }
 
   /**
-   * Emits `count` particles of a preset kind. Options override the preset
-   * field by field, so `"spark"` with a different colour is still a spark.
+   * Emits a burst of a preset kind. The third argument is either a count — the
+   * common case at a call site that only cares how big it is — or an options
+   * bag, whose fields override the preset one by one, so `"spark"` with a
+   * different colour is still a spark.
    */
-  burst(kind: BurstKind, position: THREE.Vector3, options: BurstOptions = {}): void {
+  burst(kind: BurstKind, position: THREE.Vector3, options: BurstOptions | number = {}): void {
     const preset = PRESETS[kind];
-    const count = Math.max(0, Math.round(options.count ?? 12));
+    const settings: BurstOptions = typeof options === "number" ? { count: options } : options;
+    const count = Math.max(0, Math.round(settings.count ?? 12));
     if (count === 0) return;
 
-    const speed = options.speed ?? preset.speed;
-    const speedVariance = options.speedVariance ?? preset.speedVariance;
-    const radius = options.radius ?? preset.radius;
-    const spread = options.spread ?? preset.spread;
-    const upBias = options.upBias ?? preset.upBias;
-    const life = options.life ?? preset.life;
-    const lifeVariance = options.lifeVariance ?? preset.lifeVariance;
-    const size = options.size ?? preset.size;
-    const sizeEnd = options.sizeEnd ?? preset.sizeEnd;
-    const curve = options.sizeCurve ?? preset.sizeCurve;
-    const gravity = options.gravity ?? preset.gravity;
-    const drag = options.drag ?? preset.drag;
-    const spin = options.spin ?? preset.spin;
-    const mode = options.mode ?? preset.mode;
-    const turbulence = options.turbulence ?? preset.turbulence;
-    const fade = options.fade ?? preset.fade;
-    const brightness = options.brightness ?? preset.brightness;
-    const color = options.color ?? preset.color;
-    const colorEnd = options.colorEnd ?? preset.colorEnd;
+    const speed = settings.speed ?? preset.speed;
+    const speedVariance = settings.speedVariance ?? preset.speedVariance;
+    const radius = settings.radius ?? preset.radius;
+    const spread = settings.spread ?? preset.spread;
+    const upBias = settings.upBias ?? preset.upBias;
+    const life = settings.life ?? preset.life;
+    const lifeVariance = settings.lifeVariance ?? preset.lifeVariance;
+    const size = settings.size ?? preset.size;
+    const sizeEnd = settings.sizeEnd ?? preset.sizeEnd;
+    const curve = settings.sizeCurve ?? preset.sizeCurve;
+    const gravity = settings.gravity ?? preset.gravity;
+    const drag = settings.drag ?? preset.drag;
+    const spin = settings.spin ?? preset.spin;
+    const mode = settings.mode ?? preset.mode;
+    const turbulence = settings.turbulence ?? preset.turbulence;
+    const fade = settings.fade ?? preset.fade;
+    const brightness = settings.brightness ?? preset.brightness;
+    const color = settings.color ?? preset.color;
+    const colorEnd = settings.colorEnd ?? preset.colorEnd;
 
     // A cone wider than a half turn is just an omnidirectional burst, so the
     // basis around the axis is only built when it can actually aim something.
-    const axis = options.direction;
+    const axis = settings.direction;
     const conical = axis !== undefined && spread < Math.PI * 0.95;
     if (axis && conical) {
       _axis.copy(axis);
@@ -627,11 +643,13 @@ export class ParticleSystem {
         (Math.random() * 2 - 1) * radius,
         (Math.random() * 2 - 1) * radius,
       );
-      if (options.inherit) _offset.add(options.inherit);
+
+      _velocity.copy(_direction).multiplyScalar(magnitude);
+      if (settings.inherit) _velocity.add(settings.inherit);
 
       this.spawn({
         position: _offset.add(position),
-        velocity: _direction.multiplyScalar(magnitude),
+        velocity: _velocity,
         color,
         colorEnd: colorEnd ?? color,
         size: size * (0.75 + Math.random() * 0.5),
@@ -663,16 +681,22 @@ export class ParticleSystem {
     const count = this.dirtyHi - first + 1;
     for (const attribute of this.buffers) {
       attribute.addUpdateRange(first * attribute.itemSize, count * attribute.itemSize);
+      // addUpdateRange only records where to write; needsUpdate is what makes
+      // the renderer look at the buffer at all.
+      attribute.needsUpdate = true;
     }
     this.dirtyLo = Number.POSITIVE_INFINITY;
     this.dirtyHi = -1;
   }
 
-  /** Empties the pool. */
+  /** Empties the pool immediately, including anything mid-flight. */
   clear(): void {
     this.head = 0;
     this.spawned = 0;
     this.geometry.instanceCount = 0;
+    // Zero the lifetimes so the vertex shader retires everything at once.
+    for (let i = 0; i < this.capacity; i++) this.params[i * 4 + 1] = 0;
+    for (const attribute of this.buffers) attribute.needsUpdate = true;
   }
 
   dispose(): void {

@@ -98,6 +98,8 @@ const NUL = "\0";
 const MAX_OUTBOX = 256;
 /** In-flight receipts tracked for round-trip measurement. */
 const MAX_TRACKED_RECEIPTS = 256;
+/** How long a graceful close waits for the server's DISCONNECT receipt, ms. */
+const DISCONNECT_GRACE_MS = 250;
 
 
 function escapeHeaderValue(value: string): string {
@@ -125,10 +127,13 @@ function unescapeHeaderValue(value: string): string {
 /** Splits one header line on its first *unescaped* colon. */
 function parseHeaderLine(line: string): [string, string] | null {
   for (let i = 0; i < line.length; i++) {
-    if (line[i] !== "\\" && line[i + 1] === ":") {
-      return [line.slice(0, i), unescapeHeaderValue(line.slice(i + 2))];
+    if (line[i] === "\\") {
+      i++; // an escaped character can never be the separator
+      continue;
     }
-    if (line[i] === "\\") i++;
+    if (line[i + 1] === ":") {
+      return [line.slice(0, i + 1), unescapeHeaderValue(line.slice(i + 2))];
+    }
   }
   return null;
 }
@@ -262,6 +267,9 @@ export class StompTransport implements ChannelTransport {
   private readonly receiptHandlers: ((receiptId: string, sentAtMs: number, receivedAtMs: number) => void)[] = [];
   /** receipt id → the moment the frame carrying it was written. */
   private readonly receiptsSent = new Map<string, number>();
+  /** Receipt awaited by {@link StompTransport.close}, or null. */
+  private closingReceipt: string | null = null;
+  private closeTimer: number | null = null;
 
   private heartbeatTimer: number | null = null;
   private lastInboundAt = 0;
@@ -388,24 +396,44 @@ export class StompTransport implements ChannelTransport {
 
   }
 
+  /**
+   * Sends `DISCONNECT` and closes. STOMP 1.2 asks the client to wait for the
+   * server's `RECEIPT` before dropping the socket, so a graceful close does
+   * not race the frame off the wire; a grace timer bounds the wait for a peer
+   * that never answers.
+   */
   close(): void {
     this.closeRequested = true;
     this.stopHeartbeat();
     const socket = this.socket;
     if (socket && socket.readyState === 1) {
+      const receipt = `bye-${this.nextSubscriptionId++}`;
+      this.closingReceipt = receipt;
       try {
-        socket.send(encodeStompFrame("DISCONNECT", { receipt: `bye-${this.nextSubscriptionId++}` }));
+        socket.send(encodeStompFrame("DISCONNECT", { receipt }));
       } catch {
-        // Socket is already dying; the close below is what matters.
+        // Socket already dying; the close below is what matters.
       }
+      this.closeTimer = setTimeout(() => this.finishClose(), DISCONNECT_GRACE_MS) as unknown as number;
+      return;
     }
+    this.finishClose();
+  }
+
+  private finishClose(): void {
+    this.stopHeartbeat();
+    if (this.closeTimer !== null) {
+      clearTimeout(this.closeTimer);
+      this.closeTimer = null;
+    }
+    const socket = this.socket;
     if (socket && (socket.readyState === 0 || socket.readyState === 1)) socket.close();
     this.socket = null;
     this.connected = false;
     this.subscriptions.clear();
     this.gameChannel = null;
     this.receiptsSent.clear();
-
+    this.closingReceipt = null;
     this.outbox.length = 0;
     this.setState("closed");
   }
@@ -501,6 +529,10 @@ export class StompTransport implements ChannelTransport {
     const sentAtMs = this.receiptsSent.get(receiptId);
     this.receiptsSent.delete(receiptId);
     const receivedAtMs = this.lastInboundAt;
+    if (receiptId === this.closingReceipt) {
+      this.finishClose();
+      return;
+    }
     for (const handler of this.receiptHandlers) {
       handler(receiptId, sentAtMs ?? receivedAtMs, receivedAtMs);
     }
@@ -508,6 +540,10 @@ export class StompTransport implements ChannelTransport {
 
   private onClose(ev: CloseEvent): void {
     this.stopHeartbeat();
+    if (this.closeTimer !== null) {
+      clearTimeout(this.closeTimer);
+      this.closeTimer = null;
+    }
     this.socket = null;
     this.connected = false;
     this.subscriptions.clear();

@@ -83,7 +83,7 @@ export class OrderQueue {
   push(entityId: number, order: QueuedOrder): PushResult {
     let slot = this.slots.get(entityId);
     if (!slot) {
-      slot = emptySlot();
+      slot = { current: null, queued: [] };
       this.slots.set(entityId, slot);
     }
     if (slot.current === null) {

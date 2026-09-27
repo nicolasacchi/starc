@@ -180,7 +180,10 @@ module Starc
     # One shape for both a live line and a backlog: a client reads
     # `lines`, always oldest first.
     def chat_payload(match_id, lines)
-      { v: 1, t: "lobby:chat", ts: self.class.now_ms, match_id: match_id, lines: lines }
+      # String keys, so the payload is already the wire shape. The real pubsub
+      # adapter JSON-encodes it; the test adapter hands the Hash back as-is,
+      # and the two must not disagree about what the client will see.
+      { "v" => 1, "t" => "lobby:chat", "ts" => self.class.now_ms, "match_id" => match_id.to_i, "lines" => lines }
     end
 
     # The lowest-slot seat of a match the player is in. A player is only ever in

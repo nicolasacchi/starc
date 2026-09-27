@@ -367,7 +367,7 @@ export class MinimapUi {
     const map = this.map;
     if (map === null) return;
     for (const cluster of map.mineral_clusters) {
-      const point = this.toCanvas(cluster.x, cluster.y, scale);
+      const point = this.toCanvas(cluster.x, cluster.z, scale);
       const rich = cluster.rich === true;
       ctx.fillStyle = rich ? COLOR.mineral : COLOR.expansion;
       ctx.globalAlpha = rich ? 0.95 : 0.7;
@@ -379,7 +379,7 @@ export class MinimapUi {
     ctx.strokeStyle = COLOR.start;
     ctx.lineWidth = 1.2;
     for (const start of map.start_positions) {
-      const point = this.toCanvas(start.x, start.y, scale);
+      const point = this.toCanvas(start.x, start.z, scale);
       ctx.beginPath();
       ctx.moveTo(point.x, point.y - 4);
       ctx.lineTo(point.x + 4, point.y);

@@ -14,6 +14,9 @@
 import { GAME, raceColor } from "@shared/gameData";
 import type { Race } from "@shared/protocol";
 
+/** Opaque handle for a timer the UI schedules and must cancel on dispose. */
+export type TimerHandle = number;
+
 /* ------------------------------------------------------------------ */
 /* Screen contracts                                                    */
 /* ------------------------------------------------------------------ */
@@ -48,8 +51,8 @@ export interface HudCallbacks {
   onPage?(page: number): void;
   /** A selection portrait was clicked (primary selection). */
   onSelectEntity?(entityId: number): void;
-  /** A resource chip was clicked (jump to the main base). */
-  onSelectWorker?(entityId: number): void;
+  /** The mineral chip was clicked — select the player's workers. */
+  onSelectWorker?(): void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -150,14 +153,6 @@ export function fmtInt(value: number): string {
   return Number.isFinite(rounded) ? rounded.toLocaleString("en-US") : "0";
 }
 
-export function fmtCompact(value: number): string {
-  if (!Number.isFinite(value)) return "0";
-  const abs = Math.abs(value);
-  if (abs >= 100_000) return `${Math.round(value / 1000)}k`;
-  if (abs >= 10_000) return `${(value / 1000).toFixed(1)}k`;
-  return fmtInt(value);
-}
-
 export function fmtSeconds(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
   if (seconds < 10) return `${seconds.toFixed(1)}s`;
@@ -224,6 +219,19 @@ export function docOf(root: HTMLElement): Document {
     throw new Error("STARC UI: mount() needs a DOM element — no document is available in this environment");
   }
   return doc;
+}
+
+/** Creates a typed element in `doc`; the only element factory the UI uses. */
+export function el<K extends keyof HTMLElementTagNameMap>(
+  doc: Document,
+  tag: K,
+  className?: string,
+  text?: string,
+): HTMLElementTagNameMap[K] {
+  const node = doc.createElement(tag);
+  if (className !== undefined) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 /** A labelled text input with an inline error slot underneath. */
 export function field(doc: Document, spec: FieldSpec): FieldRefs {
@@ -394,10 +402,3 @@ export function keyBadge(doc: Document, key: string, className = "keycap"): HTML
   return el(doc, "span", className, key);
 }
 
-/** `require`-free clamp of a child count into a grid of `columns` per row. */
-export function chunk<T>(items: readonly T[], size: number): T[][] {
-  const out: T[][] = [];
-  const step = Math.max(1, size);
-  for (let i = 0; i < items.length; i += step) out.push(items.slice(i, i + step));
-  return out;
-}

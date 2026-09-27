@@ -105,19 +105,19 @@ export abstract class AbstractEntityView implements EntityView {
   readonly group = new THREE.Group();
   readonly hudAnchor: THREE.Object3D;
 
-  protected hp = 0;
-  protected hpMax = 0;
-  protected shield = 0;
-  protected shieldMax = 0;
-  protected visible = true;
-  protected selected = false;
-  protected primary = false;
-  protected relation: Relation = "enemy";
-  protected state: EntityState = "idle";
+  // Public because the shared HUD layers read them through `EntityView`.
+  hp = 0;
+  hpMax = 0;
+  shield = 0;
+  shieldMax = 0;
+  visible = true;
+  selected = false;
+  primary = false;
+  relation: Relation = "enemy";
+  state: EntityState = "idle";
   protected disposed = false;
 
-  /** Last transform written by {@link setTransform}. */
-  protected readonly position = new THREE.Vector3();
+  /** Facing, kept alongside the transform for the rigs' animation. */
   protected angle = 0;
 
   /** Rigs override this to release their own geometry/material clones. */
@@ -145,7 +145,6 @@ export abstract class AbstractEntityView implements EntityView {
 
   setTransform(x: number, y: number, z: number, angle: number): void {
     if (this.disposed) return;
-    this.position.set(x, y, z);
     this.angle = angle;
     this.group.position.set(x, y, z);
     this.group.rotation.y = angle;

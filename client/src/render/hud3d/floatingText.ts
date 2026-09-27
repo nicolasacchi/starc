@@ -371,8 +371,9 @@ export class FloatingText {
 
     this.pool = [];
     this.free = [];
-    // Half the budget on low presets: damage numbers are the least critical
-    // information on screen, so they are the first thing to be trimmed.
+    // The character budget is split into whole strings: a callout costs one
+    // quad per character. Damage numbers are the least critical information on
+    // screen, so the weak preset gets a smaller share of the pool.
     const entries = Math.floor(settings.postFx ? capacity / 8 : capacity / 12);
     for (let i = 0; i < entries; i++) {
       this.pool.push({

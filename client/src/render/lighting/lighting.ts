@@ -235,6 +235,19 @@ function disposeShadow(light: THREE.Light): void {
  * and a subtle opposing fill. Cheap enough to update every frame.
  */
 export class LightingRig {
+
+/** Where the rig publishes itself on the scene. */
+const RIG_KEY = "lightingRig";
+
+/**
+ * The lighting rig for a scene, if one has been constructed. The shadow
+ * system and the environment probe use this so a caller only has to hand them
+ * the scene; pass the rig explicitly if it is not the one on that scene.
+ */
+export function lightingRigFor(scene: THREE.Scene): LightingRig | null {
+  const rig = scene.userData[RIG_KEY];
+  return rig instanceof LightingRig ? rig : null;
+}
   /** The map's key light before a {@link ShadowSystem} adopts the slot. */
   readonly sun: THREE.DirectionalLight;
   /** Sky above / ground below bounce. */
@@ -251,7 +264,7 @@ export class LightingRig {
   private readonly groundTint: THREE.Color;
   private readonly focus = new THREE.Vector3();
   private keyLight: THREE.Light;
-  private timeOfDay: number;
+  private clock: number;
   private fog: THREE.FogExp2 | null = null;
   private lightFade = 0;
 
@@ -259,7 +272,7 @@ export class LightingRig {
     this.scene = scene;
     this.mapTint = new THREE.Color().setStyle(map.lighting.sun_color, THREE.SRGBColorSpace);
     this.groundTint = new THREE.Color().setHex(BIOME_BOUNCE[map.biome] ?? 0x3c3c34, THREE.SRGBColorSpace);
-    this.timeOfDay = map.lighting.time_of_day;
+    this.clock = map.lighting.time_of_day;
 
     this.target = new THREE.Object3D();
     scene.add(this.target);
@@ -287,7 +300,10 @@ export class LightingRig {
       this.fill.visible = false;
     }
 
-    this.setTimeOfDay(this.timeOfDay);
+    // Published so the shadow system and the environment probe can find the
+    // key light without every caller having to thread the rig through.
+    scene.userData[RIG_KEY] = this;
+    this.setTimeOfDay(this.clock);
   }
 
   /** Unit vector from the scene towards the key light. */
@@ -312,7 +328,7 @@ export class LightingRig {
 
   /** The clock this rig was last evaluated at. */
   get timeOfDay(): number {
-    return this.timeOfDay;
+    return this.clock;
   }
 
   /**
@@ -346,7 +362,7 @@ export class LightingRig {
 
   /** Jumps the clock. Continuous across the dawn/dusk crossfade. */
   setTimeOfDay(timeOfDay: number): void {
-    this.timeOfDay = timeOfDay;
+    this.clock = timeOfDay;
     this.evaluate();
   }
 
@@ -359,7 +375,7 @@ export class LightingRig {
   }
 
   private evaluate(): void {
-    const state = sunStateFor(this.timeOfDay, this.state, this.mapTint, this.groundTint);
+    const state = sunStateFor(this.clock, this.state, this.mapTint, this.groundTint);
     this.applyKey();
 
     const day = 1 - state.night;

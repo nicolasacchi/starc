@@ -63,7 +63,7 @@ module Starc
             e = pending.shift
             world.emit(
               "e" => "death", "id" => e.id, "ty" => e.type_key,
-              "x" => round3(e.x), "y" => round3(e.z), "z" => round3(e.z_world),
+              "x" => round3(e.x), "z" => round3(e.z), "y" => round3(e.z_world),
               "killer" => e.last_hit_by || 0
             )
 
@@ -97,6 +97,7 @@ module Starc
           e.train_queue.clear
           e.train_key = nil
           e.train_progress = nil
+          victim[:supply_pending] = 0 if victim[:supply_pending].negative?
         end
 
         # Anything still pointing at a corpse is pointing at nothing. Deaths
@@ -108,11 +109,16 @@ module Starc
             o = world.living[i]
             i += 1
             o.target_id = 0 if o.target_id == dead.id
-            if o.construct_id == dead.id
-              o.construct_id = 0
-              o.state = "idle" if o.state == "building"
-            end
-            o.harvest_node_id = nil if o.harvest_phase == :to_node && !o.unit?
+            next unless o.construct_id == dead.id
+
+            # The building this worker was placing is gone. A worker that was
+            # mining before the detour picks its shuttle back up.
+            o.construct_id = 0
+            o.state = if o.order == Starc::Sim::Entity::ORDER_HARVEST && o.worker?
+                        "harvesting"
+                      else
+                        "idle"
+                      end
           end
         end
 

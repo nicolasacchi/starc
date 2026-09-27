@@ -27,7 +27,7 @@ module Starc
             completed = true
             world.emit(
               "e" => "built", "id" => e.id, "ty" => e.type_key,
-              "x" => round3(e.x), "y" => round3(e.z), "z" => round3(e.z_world)
+              "x" => round3(e.x), "z" => round3(e.z), "y" => round3(e.z_world)
             )
           end
           return unless completed
@@ -44,7 +44,11 @@ module Starc
             next if b.nil? || !b.alive? || !b.complete?
 
             w.construct_id = 0
-            w.state = "idle" if w.state == "building"
+            w.state = if w.order == Starc::Sim::Entity::ORDER_HARVEST && w.worker?
+                        "harvesting"
+                      else
+                        "idle"
+                      end
           end
         end
 

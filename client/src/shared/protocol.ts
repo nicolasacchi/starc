@@ -131,7 +131,7 @@ export interface RaceData {
 
 export interface MapMineralCluster {
   x: number;
-  y: number;
+  z: number;
   rich?: boolean;
   count: number;
 }
@@ -145,9 +145,9 @@ export interface MapDef {
   elevation: number;
   biome: string;
   description: string;
-  start_positions: { x: number; y: number }[];
+  start_positions: { x: number; z: number }[];
   mineral_clusters: MapMineralCluster[];
-  expansion_candidates: { x: number; y: number }[];
+  expansion_candidates: { x: number; z: number }[];
   lighting: { time_of_day: number; sun_color: string; fog_density: number };
 }
 
@@ -173,15 +173,15 @@ export interface GameData {
 /* ------------------------------------------------------------------ */
 
 export type Command =
-  | { c: "move"; ids: number[]; x: number; y: number; queue?: boolean }
+  | { c: "move"; ids: number[]; x: number; z: number; queue?: boolean }
   | { c: "attack"; ids: number[]; target_id: number; queue?: boolean }
   | { c: "stop"; ids: number[] }
   | { c: "hold"; ids: number[] }
-  | { c: "patrol"; ids: number[]; x: number; y: number; x2: number; y2: number; queue?: boolean }
+  | { c: "patrol"; ids: number[]; x: number; z: number; x2: number; z2: number; queue?: boolean }
   | { c: "train"; building_id: number; unit_type: string; count?: number }
-  | { c: "build"; worker_id: number; unit_type: string; x: number; y: number }
+  | { c: "build"; worker_id: number; unit_type: string; x: number; z: number }
   | { c: "cancel"; building_id: number }
-  | { c: "rally"; building_id: number; x: number; y: number }
+  | { c: "rally"; building_id: number; x: number; z: number }
   | { c: "harvest"; worker_id: number }
   | { c: "ability"; ids: number[]; ability: string }
   | { c: "select"; ids: number[] }
@@ -219,8 +219,10 @@ export interface ProtocolEntity {
   ty: string;
   pl: number;
   x: number;
-  y: number;
+  /** Ground-plane second axis (three.js Z). */
   z: number;
+  /** World height above the terrain — the server's authoritative Y. */
+  y: number;
   hp: number;
   hp_max: number;
   mp: number;
@@ -232,7 +234,7 @@ export interface ProtocolEntity {
   tid?: number;
   ord?: OrderKind;
   ox?: number;
-  oy?: number;
+  oz?: number;
   prog?: number;
   cargo?: number;
   res?: number;
@@ -241,13 +243,13 @@ export interface ProtocolEntity {
 }
 
 export type GameEvent =
-  | { e: "shot"; id: number; x: number; y: number; z: number; tx: number; ty: number; tz: number }
+  | { e: "shot"; id: number; x: number; z: number; y: number; tx: number; tz: number; ty: number }
   | { e: "hit"; id: number; tid: number; dmg: number; crit: boolean; shield: boolean }
-  | { e: "death"; id: number; ty: string; x: number; y: number; z: number; killer: number }
-  | { e: "built"; id: number; ty: string; x: number; y: number; z: number }
-  | { e: "proj"; id: number; ty: string; x: number; y: number; z: number; tx: number; ty2: number; tz: number }
-  | { e: "ability"; id: number; ab: string; x: number; y: number; z: number }
-  | { e: "res"; pl: number; amount: number; x: number; y: number }
+  | { e: "death"; id: number; ty: string; x: number; z: number; y: number; killer: number }
+  | { e: "built"; id: number; ty: string; x: number; z: number; y: number }
+  | { e: "proj"; id: number; ty: string; x: number; z: number; y: number; tx: number; tz: number; ty: number }
+  | { e: "ability"; id: number; ab: string; x: number; z: number; y: number }
+  | { e: "res"; pl: number; amount: number; x: number; z: number }
   | { e: "alert"; text: string };
 
 export interface PlayerScore {
@@ -328,6 +330,12 @@ export type ClientMessage =
 
 export type ServerMessage =
   | { v: 1; t: "lobby:state"; matches: LobbyMatchSummary[]; you: LobbyContext | null }
+  /**
+   * Chat for one match. `lines` is the backlog (up to 100, oldest first) plus
+   * any new line, so a client that just joined renders the whole room from a
+   * single message and needs no separate history request.
+   */
+  | { v: 1; t: "lobby:chat"; match_id: number; lines: LobbyChatLine[] }
   | { v: 1; t: "error"; code: ServerErrorCode; message: string; fatal: boolean }
   | {
       v: 1;
@@ -338,7 +346,7 @@ export type ServerMessage =
       tick_rate: number;
       snapshot_rate: number;
       countdown_ms: number;
-      players: { player_id: number; slot: number; race: Race; name: string; team: number; start: { x: number; y: number } }[];
+      players: { player_id: number; slot: number; race: Race; name: string; team: number; start: { x: number; z: number } }[];
     }
   | { v: 1; t: "game:snapshot"; tick: number; server_ms: number; ack: number; entities: ProtocolEntity[]; events: GameEvent[] }
   | { v: 1; t: "game:reject"; rejected: Rejection[] }

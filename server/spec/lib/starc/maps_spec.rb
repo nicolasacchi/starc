@@ -60,7 +60,7 @@ RSpec.describe Starc::Maps do
       maps.all.each do |m|
         m["start_positions"].each do |p|
           expect(p["x"]).to be_between(0, m["size"]), "#{m['id']} start x out of bounds"
-          expect(p["y"]).to be_between(0, m["size"]), "#{m['id']} start y out of bounds"
+          expect(p["z"]).to be_between(0, m["size"]), "#{m['id']} start z out of bounds"
         end
       end
     end
@@ -69,7 +69,7 @@ RSpec.describe Starc::Maps do
       maps.all.each do |m|
         m["mineral_clusters"].each do |c|
           expect(c["x"]).to be_between(0, m["size"]), "#{m['id']} mineral x out of bounds"
-          expect(c["y"]).to be_between(0, m["size"]), "#{m['id']} mineral y out of bounds"
+          expect(c["z"]).to be_between(0, m["size"]), "#{m['id']} mineral z out of bounds"
         end
       end
     end
@@ -78,7 +78,7 @@ RSpec.describe Starc::Maps do
       maps.all.each do |m|
         m["expansion_candidates"].each do |c|
           expect(c["x"]).to be_between(0, m["size"]), "#{m['id']} expansion x out of bounds"
-          expect(c["y"]).to be_between(0, m["size"]), "#{m['id']} expansion y out of bounds"
+          expect(c["z"]).to be_between(0, m["size"]), "#{m['id']} expansion z out of bounds"
         end
       end
     end
@@ -87,7 +87,7 @@ RSpec.describe Starc::Maps do
       maps.all.each do |m|
         expect(m["mineral_clusters"]).not_to be_empty
         m["start_positions"].each_with_index do |p, i|
-          nearest = m["mineral_clusters"].map { |c| Math.hypot(p["x"] - c["x"], p["y"] - c["y"]) }.min
+          nearest = m["mineral_clusters"].map { |c| Math.hypot(p["x"] - c["x"], p["z"] - c["z"]) }.min
           expect(nearest).to be <= MAX_MINERAL_DISTANCE,
                                 "#{m['id']} start #{i} is #{nearest.round(2)} m from the nearest minerals"
         end

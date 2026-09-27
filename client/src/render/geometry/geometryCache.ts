@@ -13,8 +13,9 @@
  */
 import * as THREE from "three";
 import { entityDef } from "@shared/gameData";
-import { unitGeometry } from "./unitGeometry";
-import { buildingGeometry } from "./buildingGeometry";
+
+/** Builds a fresh geometry for a roster key the first time it is needed. */
+export type GeometryBuilder = (typeKey: string) => THREE.BufferGeometry;
 
 export type GeometryKind = "unit" | "building";
 
@@ -39,7 +40,7 @@ export class GeometryCache {
    * taking one reference. The caller owns that reference and must pass the
    * geometry (or its key) to `release` when it is done with it.
    */
-  acquire(key: string): THREE.BufferGeometry {
+  acquire(key: string, build: GeometryBuilder): THREE.BufferGeometry {
     const existing = this.entries.get(key);
     if (existing) {
       existing.refs += 1;
@@ -47,7 +48,7 @@ export class GeometryCache {
     }
     // The roster decides what a key is, so one namespace covers all 57 types.
     const kind: GeometryKind = entityDef(key).kind === "building" ? "building" : "unit";
-    const geometry = kind === "building" ? buildingGeometry(key) : unitGeometry(key);
+    const geometry = build(key);
     const entry: CacheEntry = { key, kind, geometry, refs: 1 };
     this.entries.set(key, entry);
     this.owners.set(geometry, entry);
@@ -105,34 +106,22 @@ export class GeometryCache {
 /** Process-wide cache used by the entity views. */
 export const geometryCache = new GeometryCache();
 
-/** Shared unit geometry, built on first use. Release with `releaseUnitGeometry`. */
-export function acquireUnitGeometry(key: string): THREE.BufferGeometry {
-  return geometryCache.acquire(key);
-}
-
-/** Shared building geometry, built on first use. */
-export function acquireBuildingGeometry(key: string): THREE.BufferGeometry {
-  return geometryCache.acquire(key);
-}
-
-export function releaseUnitGeometry(key: string): boolean {
+/** Releases a reference taken by `acquire`. True when it disposed the buffer. */
+export function releaseGeometryKey(key: string): boolean {
   return geometryCache.release(key);
 }
 
-export function releaseBuildingGeometry(key: string): boolean {
-  return geometryCache.release(key);
-}
-
+/** Releases a reference by geometry, for callers that only hold the mesh. */
 export function releaseGeometry(geometry: THREE.BufferGeometry): boolean {
   return geometryCache.releaseGeometry(geometry);
 }
 
 /** Frees every cached geometry; the cache is usable again afterwards. */
-export function clear(): void {
+export function clearGeometryCache(): void {
   geometryCache.disposeAll();
 }
 
-/** Alias of `clear`, named for the GPU-resource habit it follows. */
+/** Alias of `clearGeometryCache`, named for the GPU-resource habit it follows. */
 export function disposeAll(): void {
   geometryCache.disposeAll();
 }

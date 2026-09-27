@@ -16,11 +16,6 @@ module Starc
       ORDER_HARVEST = 3
       ORDER_PATROL = 4
 
-      # Entity states, per PROTOCOL.md §5 (`st`).
-      STATES = %w[
-        idle moving attacking harvesting returning building training casting dead
-      ].freeze
-
       # Buildings that refine vespene once complete (Systems::Economy).
       GEYSER_KEYS = %w[refinery extractor assimilator].freeze
 
@@ -108,10 +103,6 @@ module Starc
         @z_world = 0.0
       end
 
-      def registry
-        @registry
-      end
-
       def alive?
         !@dead
       end
@@ -159,15 +150,20 @@ module Starc
       # --- derived combat / movement values --------------------------------
 
       # Damage is the weapon's own value plus every live `attack_boost`.
+      # Damage is the weapon's own value plus every live `attack_boost`.
       def attack_bonus(tick)
-        bonus = 0.0
-        each_active_buff(tick) { |key, _expiry| bonus += @registry.magnitude(key) if @registry.effect(key) == "attack_boost" }
-        bonus
+        bonus_for(tick, "attack_boost")
       end
 
       def armor_bonus(tick)
+        bonus_for(tick, "armor_boost")
+      end
+
+      def bonus_for(tick, effect)
         bonus = 0.0
-        each_active_buff(tick) { |key, _expiry| bonus += @registry.magnitude(key) if @registry.effect(key) == "armor_boost" }
+        each_active_buff(tick) do |key, _expiry|
+          bonus += @registry.magnitude(key) if @registry.effect(key) == effect
+        end
         bonus
       end
 
@@ -189,9 +185,7 @@ module Starc
       end
 
       def shield_bonus(tick)
-        bonus = 0.0
-        each_active_buff(tick) { |key, _expiry| bonus += @registry.magnitude(key) if @registry.effect(key) == "shield" }
-        bonus
+        bonus_for(tick, "shield")
       end
 
       def total_shield_max(tick)
@@ -222,33 +216,14 @@ module Starc
         end
       end
 
-      def buff_active?(key, tick)
-        expiry = @buffs[key]
-        !expiry.nil? && expiry > tick
-      end
-
       def apply_buff(key, expiry_tick)
         @buffs[key] = expiry_tick
-      end
-
-      def clear_buff!(key)
-        @buffs.delete(key)
       end
 
       def expire_buffs!(tick)
         return if @buffs.empty?
 
         @buffs.delete_if { |_key, expiry| expiry <= tick }
-      end
-
-      def buff_active_any?(tick)
-        tick ? @buffs.any? { |_key, expiry| expiry > tick } : !@buffs.empty?
-      end
-
-      # --- orders -----------------------------------------------------------
-
-      def ordered?
-        @order != ORDER_NONE || @construct_id != 0
       end
 
       def clear_orders!
@@ -333,8 +308,8 @@ module Starc
           "ty" => @type_key,
           "pl" => @player_id,
           "x" => round3(@x),
-          "y" => round3(@z),
-          "z" => round3(@z_world),
+          "z" => round3(@z),
+          "y" => round3(@z_world),
           "hp" => dead ? 0 : round2(@hp),
           "hp_max" => round2(@hp_max),
           "mp" => round2(@shield),
@@ -349,7 +324,7 @@ module Starc
         if @order != ORDER_NONE
           h["ord"] = @order
           h["ox"] = round3(@order_x)
-          h["oy"] = round3(@order_z)
+          h["oz"] = round3(@order_z)
         end
         prog = @train_progress
         prog = @build_progress if prog.nil? || prog.zero?
@@ -366,12 +341,12 @@ module Starc
       def to_state_hash
         {
           "id" => @id, "ty" => @type_key, "pl" => @player_id,
-          "x" => @x, "y" => @z, "z" => @z_world,
+          "x" => @x, "z" => @z, "y" => @z_world,
           "hp" => @hp, "hp_max" => @hp_max,
           "mp" => @shield, "mp_max" => @shield_max,
           "ang" => @angle, "st" => @dead ? "dead" : @state,
           "w" => @cooldown, "tid" => @target_id, "ord" => @order,
-          "ox" => @order_x, "oy" => @order_z,
+          "ox" => @order_x, "oz" => @order_z,
           "patrol_x2" => @patrol_x2, "patrol_z2" => @patrol_z2,
           "prog" => @build_progress, "train_progress" => @train_progress,
           "train_key" => @train_key, "train_queue" => @train_queue.dup,

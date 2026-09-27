@@ -100,14 +100,6 @@ export class TriSoup {
   private readonly positions: number[] = [];
   private readonly uvs: number[] = [];
 
-  get triangleCount(): number {
-    return this.positions.length / 9;
-  }
-
-  get isEmpty(): boolean {
-    return this.positions.length === 0;
-  }
-
   /** Raw triangle, caller guarantees the winding. */
   tri(a: V3, b: V3, c: V3, uvScale = UV_METRES): this {
     this.positions.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
@@ -293,18 +285,12 @@ export function setPartColor(
 }
 
 /**
- * Collects tinted parts and merges them into a single buffer. `startGroup`
- * splits the result into draw groups — unit geometry uses that to keep the
- * air-unit shadow decal in its own material slot.
+ * Collects tinted parts and merges them into a single non-indexed buffer.
+ * Every part carries the same attribute set (position, uv, normal, colour),
+ * which is what lets the merge succeed and the mesh render in one call.
  */
 export class PartList {
-  private readonly groups: { name: string; parts: THREE.BufferGeometry[] }[] = [];
-  private open: { name: string; parts: THREE.BufferGeometry[] };
-
-  constructor(startName = "body") {
-    this.open = { name: startName, parts: [] };
-    this.groups.push(this.open);
-  }
+  private readonly parts: THREE.BufferGeometry[] = [];
 
   add(
     geometry: THREE.BufferGeometry,
@@ -313,67 +299,28 @@ export class PartList {
   ): this {
     if (transform) transformGeometry(geometry, transform);
     setPartColor(geometry, tone);
-    this.open.parts.push(geometry);
+    this.parts.push(geometry);
     return this;
-  }
-
-  startGroup(name: string): this {
-    this.open = { name, parts: [] };
-    this.groups.push(this.open);
-    return this;
-  }
-
-  get groupNames(): readonly string[] {
-    return this.groups.map((g) => g.name);
   }
 
   get partCount(): number {
-    let n = 0;
-    for (const g of this.groups) n += g.parts.length;
-    return n;
+    return this.parts.length;
   }
 
-  /** Merges every group; groups become material groups on the result. */
   merge(): THREE.BufferGeometry {
-    const merged: THREE.BufferGeometry[] = [];
-    for (const g of this.groups) {
-      if (g.parts.length === 0) continue;
-      if (g.parts.length === 1) {
-        merged.push(g.parts[0]);
-        continue;
-      }
-      const one = mergeGeometries(g.parts, false);
-      if (one) merged.push(one);
+    if (this.parts.length === 0) throw new Error("PartList.merge(): no parts were added");
+    if (this.parts.length === 1) {
+      const only = this.parts[0] as THREE.BufferGeometry;
+      only.computeBoundingBox();
+      only.computeBoundingSphere();
+      return only;
     }
-    if (merged.length === 0) {
-      throw new Error("PartList.merge(): no parts were added");
-    }
-    const out = merged.length === 1 ? (merged[0] as THREE.BufferGeometry) : mergeGeometries(merged, true);
-    if (!out) throw new Error("PartList.merge(): geometry merge failed");
-    out.computeBoundingBox();
-    out.computeBoundingSphere();
-    return out;
+    const merged = mergeGeometries(this.parts, false);
+    if (!merged) throw new Error("PartList.merge(): geometry merge failed");
+    merged.computeBoundingBox();
+    merged.computeBoundingSphere();
+    return merged;
   }
-}
-
-/**
- * Merges already-built buffers into one geometry, one material group per
- * input. Air units use it to keep the shadow decal out of the hull's draw
- * call, which needs its own transparent material.
- */
-export function mergeGroups(geometries: readonly THREE.BufferGeometry[]): THREE.BufferGeometry {
-  if (geometries.length === 0) throw new Error("mergeGroups(): nothing to merge");
-  if (geometries.length === 1) {
-    const single = geometries[0] as THREE.BufferGeometry;
-    single.computeBoundingBox();
-    single.computeBoundingSphere();
-    return single;
-  }
-  const merged = mergeGeometries([...geometries], true);
-  if (!merged) throw new Error("mergeGroups(): geometry merge failed");
-  merged.computeBoundingBox();
-  merged.computeBoundingSphere();
-  return merged;
 }
 
 /* ------------------------------------------------------------------ */

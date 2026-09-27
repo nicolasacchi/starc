@@ -81,7 +81,7 @@ module Starc
 
           world.emit(
             "e" => "ability", "id" => caster.id, "ab" => key,
-            "x" => round3(caster.x), "y" => round3(caster.z), "z" => round3(caster.z_world)
+            "x" => round3(caster.x), "z" => round3(caster.z), "y" => round3(caster.z_world)
           )
         end
 

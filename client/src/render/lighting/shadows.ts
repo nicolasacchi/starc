@@ -24,7 +24,7 @@ import * as THREE from "three";
 import { SunLight } from "three/addons/lights/SunLight.js";
 import type { QualitySettings } from "@render/core/quality";
 import type { HeightField } from "@render/terrain/heightfield";
-import type { LightingRig } from "./lighting";
+import { lightingRigFor, type LightingRig } from "./lighting";
 
 /** Cascades the engine can actually fit. */
 const MAX_CASCADES = 2;
@@ -42,11 +42,13 @@ const FALLBACK_UP = new THREE.Vector3(0, 0, 1);
 const _cameraRight = new THREE.Vector3();
 const _cameraUp = new THREE.Vector3();
 const _corners = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+const _eye = new THREE.Vector3();
 
 /**
  * Corner `index` of a view frustum at `depth`, in world space. Corners wind
  * from the far-right one; the scratch vectors are preallocated because this
- * runs on every frame.
+ * runs on every frame. The camera position matters as much as the directions:
+ * without it the box is fitted around the world origin rather than the view.
  */
 function frustumCorner(
   index: number,
@@ -58,7 +60,7 @@ function frustumCorner(
   const sx = index === 0 || index === 1 ? 1 : -1;
   const sy = index === 0 || index === 3 ? 1 : -1;
   return _corners[index]
-    .set(0, 0, 0)
+    .copy(_eye)
     .addScaledVector(right, sx)
     .addScaledVector(up, sy)
     .addScaledVector(forward, depth);
@@ -297,7 +299,7 @@ export class ShadowSystem {
   readonly contact: ContactShadows;
 
   private readonly scene: THREE.Scene;
-  private readonly rig: LightingRig;
+  private readonly rig: LightingRig | null;
   private readonly debug: CascadeDebug;
   private sun: SunLight | null = null;
   private readonly cascades: number;
@@ -305,9 +307,9 @@ export class ShadowSystem {
   private debugCascade: number | null = null;
   private readonly cascadeCameras: THREE.OrthographicCamera[] = [];
 
-  constructor(scene: THREE.Scene, settings: QualitySettings, rig: LightingRig) {
+  constructor(scene: THREE.Scene, settings: QualitySettings, rig?: LightingRig | null) {
     this.scene = scene;
-    this.rig = rig;
+    this.rig = rig ?? lightingRigFor(scene);
     this.settings = settings;
     this.cascades = Math.max(0, Math.min(MAX_CASCADES, Math.round(settings.shadowCascades)));
     this.shadowDistance = 120;
@@ -327,8 +329,10 @@ export class ShadowSystem {
       sun.shadow.normalBias = 0.045;
       sun.shadow.radius = settings.postFx ? 2.5 : 1.5;
       this.sun = sun;
-      rig.adoptKeyLight(sun);
-    } else {
+      // A rig is what supplies the sun's colour and angle; without one the
+      // cascade light stands on its own and aims itself in `update`.
+      if (this.rig) this.rig.adoptKeyLight(sun);
+    } else if (this.rig) {
       this.rig.sun.castShadow = this.cascades === 1;
       const shadow = this.rig.sun.shadow;
       shadow.mapSize.set(resolution, resolution);
@@ -385,7 +389,7 @@ export class ShadowSystem {
     if (this.sun) {
       this.sun.shadow.camera.far = this.shadowDistance;
       this.sun.shadow.camera.near = 0.5;
-    } else if (this.cascades === 1) {
+    } else if (this.rig && this.cascades === 1) {
       this.fitSingleCascade(camera);
     }
 
@@ -404,9 +408,10 @@ export class ShadowSystem {
     if (this.sun) {
       this.sun.castShadow = false;
       this.sun.shadow.dispose();
-      this.rig.restoreKeyLight();
+      this.scene.remove(this.sun);
+      this.rig?.restoreKeyLight();
       this.sun = null;
-    } else {
+    } else if (this.rig) {
       this.rig.sun.castShadow = false;
     }
     this.cascadeCameras.length = 0;
@@ -419,7 +424,7 @@ export class ShadowSystem {
       for (let i = 0; i < this.cascades; i++) {
         this.cascadeCameras.push(this.sun.shadow.getCamera(i));
       }
-    } else if (this.cascades === 1) {
+    } else if (this.rig && this.cascades === 1) {
       this.cascadeCameras.push(this.rig.sun.shadow.camera as THREE.OrthographicCamera);
     }
   }
@@ -430,17 +435,20 @@ export class ShadowSystem {
    * only pans, so the snap holds the shadow rock steady.
    */
   private fitSingleCascade(camera: THREE.PerspectiveCamera): void {
-    const light = this.rig.sun;
+    const rig = this.rig;
+    if (!rig) return;
+    const light = rig.sun;
     const shadow = light.shadow;
     const ortho = shadow.camera as THREE.OrthographicCamera;
 
     camera.updateMatrixWorld();
-    _dir.copy(this.rig.sunDirection).normalize();
+    _dir.copy(rig.sunDirection).normalize();
     _up.copy(Math.abs(_dir.y) > 0.99 ? FALLBACK_UP : UP);
     _right.crossVectors(_up, _dir).normalize();
     _up.crossVectors(_dir, _right).normalize();
 
-    // Corners of the view frustum at the shadow distance.
+    // Corners of the view frustum at the shadow distance, anchored on the eye.
+    camera.getWorldPosition(_eye);
     camera.getWorldDirection(_forward);
     const halfHeight = Math.tan((camera.fov * Math.PI) / 360) * this.shadowDistance;
     const halfWidth = halfHeight * camera.aspect;

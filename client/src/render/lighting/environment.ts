@@ -12,9 +12,8 @@
  * there. A failed build latches off rather than retrying every frame.
  */
 import * as THREE from "three";
-import type { MapDef } from "@shared/protocol";
 import type { QualitySettings } from "@render/core/quality";
-import type { LightingRig } from "./lighting";
+import { createSunState, lightingRigFor, sunStateFor, type LightingRig } from "./lighting";
 
 /** Never rebuild more often than this, however fast the clock moves. */
 const REBUILD_INTERVAL = 0.25;
@@ -85,7 +84,7 @@ const SKY_FRAG_WITH_HASH = SKY_FRAG.replace(
 export class EnvironmentProbe {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
-  private readonly rig: LightingRig;
+  private readonly rig: LightingRig | null;
   private readonly cubeTarget: THREE.WebGLCubeRenderTarget;
   private readonly cubeCamera: THREE.CubeCamera;
   private readonly skyScene: THREE.Scene;
@@ -111,15 +110,14 @@ export class EnvironmentProbe {
   private disposed = false;
 
   constructor(
-    renderer: THREE.WebGLRenderer,
     scene: THREE.Scene,
-    map: MapDef,
+    renderer: THREE.WebGLRenderer,
     settings: QualitySettings,
-    rig: LightingRig,
+    rig?: LightingRig | null,
   ) {
     this.renderer = renderer;
     this.scene = scene;
-    this.rig = rig;
+    this.rig = rig ?? lightingRigFor(scene);
 
     const size = settings.postFx ? 256 : 128;
     this.cubeTarget = new THREE.WebGLCubeRenderTarget(size, {
@@ -158,7 +156,9 @@ export class EnvironmentProbe {
     this.skyScene.add(new THREE.Mesh(this.boxGeometry, this.material));
 
     this.cubeCamera = new THREE.CubeCamera(0.1, 10, this.cubeTarget);
-    this.cubeCamera.position.set(map.size * 0.5, 2, map.size * 0.5);
+    // The probe renders an infinitely distant sky, so its own position is
+    // irrelevant; the origin is as good as anywhere.
+    this.cubeCamera.position.set(0, 0, 0);
     this.pmrem = new THREE.PMREMGenerator(renderer);
   }
 
@@ -169,18 +169,23 @@ export class EnvironmentProbe {
 
   /**
    * Rebuilds the probe when the sky has moved enough to be worth it. Safe to
-   * call every frame; it is a no-op on a static clock.
+   * call every frame; it is a no-op on a static clock. The delta is optional,
+   * so a caller that only wants "advance" can pass nothing.
    */
-  update(deltaSeconds: number): void {
+  update(deltaSeconds = 1 / 60): void {
     if (this.disposed || this.failed) return;
     this.sinceRebuild += deltaSeconds;
     if (this.sinceRebuild < REBUILD_INTERVAL) return;
 
-    const timeOfDay = this.rig.timeOfDay;
-    const sun = this.rig.state.direction;
-    if (timeOfDay === this.lastTimeOfDay && sun.distanceTo(this.lastSun) < SUN_MOVEMENT_EPSILON) return;
+    // Without a rig the probe still has to produce something, so it falls back
+    // to a plain midday sky from the same model.
+    const state = this.rig ? this.rig.state : sunStateFor(0.5, FALLBACK_STATE);
+    const timeOfDay = this.rig ? this.rig.timeOfDay : 0.5;
+    if (timeOfDay === this.lastTimeOfDay && state.direction.distanceTo(this.lastSun) < SUN_MOVEMENT_EPSILON) {
+      return;
+    }
 
-    this.rebuild(timeOfDay, sun);
+    this.rebuild(timeOfDay, state.direction);
   }
 
   /** The current environment texture, or null before the first build. */
@@ -204,7 +209,7 @@ export class EnvironmentProbe {
   }
 
   private rebuild(timeOfDay: number, sun: THREE.Vector3): void {
-    const state = this.rig.state;
+    const state = this.rig ? this.rig.state : sunStateFor(0.5, FALLBACK_STATE);
     this.uniforms.uZenith.value.copy(state.skyZenith);
     this.uniforms.uHorizon.value.copy(state.skyHorizon);
     this.uniforms.uGround.value.copy(state.ground);

@@ -137,7 +137,7 @@ module Starc
             st[:resources_mined] += amount
             world.emit(
               "e" => "res", "pl" => e.player_id, "amount" => amount,
-              "x" => round3(e.x), "y" => round3(e.z)
+              "x" => round3(e.x), "z" => round3(e.z)
             )
           end
           e.cargo -= amount
@@ -147,31 +147,53 @@ module Starc
           e.state = "harvesting"
         end
 
-        # Geysers take priority as a drop-off; otherwise the nearest complete
-        # friendly building, which is how the opening minutes work before a
-        # player has built a refinery.
+        # Where a worker unloads: the nearest complete friendly building. Early
+        # on that is the main building, which is how the opening minutes work
+        # before anyone has built a depot or a refinery. Geysers are buildings
+        # like any other here — their own job is refining vespene.
+        #
+        # The candidate list is cached per player and rebuilt only when that
+        # player's set of buildings changes. Picking the nearest out of a
+        # handful of buildings is free; rescanning the whole entity table once
+        # per worker per tick would make the economy O(workers x entities).
         def self.drop_off(world, e)
+          st = world.state(e.player_id)
+          return nil if st.nil?
+
           best = nil
           best_d = Float::INFINITY
-          geyser = nil
-          geyser_d = Float::INFINITY
-          world.each_living do |b|
-            next unless b.alive? && b.is_building && b.complete?
-            next unless b.player_id == e.player_id
+          list = drop_offs(world, st)
+          i = 0
+          while i < list.size
+            entry = list[i]
+            i += 1
+            d = ((entry[0] - e.x) * (entry[0] - e.x)) + ((entry[1] - e.z) * (entry[1] - e.z))
+            next if d >= best_d
 
-            d = ((b.x - e.x) * (b.x - e.x)) + ((b.z - e.z) * (b.z - e.z))
-            if b.geyser?
-              next unless d < geyser_d
-
-              geyser_d = d
-              geyser = b
-            end
-            next unless d < best_d
+            candidate = world.entity(entry[2])
+            next if candidate.nil? || !candidate.alive?
 
             best_d = d
-            best = b
+            best = candidate
           end
-          geyser || best
+          best
+        end
+
+        # `[[x, z, id], ...]` for every complete friendly building, rebuilt
+        # only when the player's building set changes.
+        def self.drop_offs(world, st)
+          cached = st[:drop_offs]
+          return cached if cached && st[:drop_offs_version] == st[:building_version]
+
+          list = []
+          world.each_living do |b|
+            next unless b.alive? && b.is_building && b.complete? && b.player_id == st[:id]
+
+            list << [b.x, b.z, b.id]
+          end
+          st[:drop_offs] = list
+          st[:drop_offs_version] = st[:building_version]
+          list
         end
 
         def self.within?(e, x, z, reach)

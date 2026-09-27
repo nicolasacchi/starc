@@ -23,10 +23,6 @@ module Starc
 
       attr_reader :count, :cell_size
 
-      def each_key_of(entity)
-        @loc[entity.id]
-      end
-
       def insert(entity)
         return if @loc.key?(entity.id)
 

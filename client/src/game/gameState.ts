@@ -259,25 +259,30 @@ export class GameState {
     return Math.max(0, Math.round(this.vespeneEcho));
   }
 
+  /**
+   * Supply used, mirroring the server's accounting pass exactly: the roster
+   * `supply` cost of our own living units. Buildings cost no supply, and a
+   * half-built one had its reservation taken the moment it was placed (see the
+   * server's `spawn_entity` and `Systems::Accounting`).
+   */
   supply(): number {
-    let used = GAME.base_supply;
+    let used = 0;
     for (const e of this.ownEntities()) {
-      if (e.st === "dead") continue;
-      const cost = costOf(e);
-      if (cost.supply > 0) used += cost.supply;
-      else if (isBuildingKey(e.ty) && (e.prog ?? 1) < 1) used += constructionSupply(e);
+      if (e.st === "dead" || !hasEntityDef(e.ty) || isBuilding(e.ty)) continue;
+      used += entityDef(e.ty).cost.supply;
     }
     return used;
   }
 
+  /** Base supply plus what our own finished buildings provide. */
   supplyMax(): number {
     let cap = GAME.base_supply;
     for (const e of this.ownEntities()) {
-      if (e.st === "dead" || !isBuildingKey(e.ty)) continue;
+      if (e.st === "dead" || !hasEntityDef(e.ty) || !isBuilding(e.ty)) continue;
       if ((e.prog ?? 1) < 1) continue;
-      cap += costOf(e).supply_provided;
+      cap += entityDef(e.ty).cost.supply_provided ?? 0;
     }
-    return Math.min(cap, GAME.max_supply);
+    return cap;
   }
 
   selection(): number[] {

@@ -35,6 +35,11 @@ export const DEFAULT_MAX_CATCH_UP_STEPS = 5;
 
 /** Frames averaged for the reported frame rate. */
 const FPS_WINDOW = 60;
+/**
+ * Absorbs the rounding of clock deltas: a frame that is exactly one step long
+ * must run that step instead of landing a fraction short of it every time.
+ */
+const STEP_EPSILON = 1e-9;
 
 export interface GameLoopOptions {
   /** Runs once per fixed sub-step with the fixed `dt`. */
@@ -72,7 +77,7 @@ export class GameLoop {
   private isRunning = false;
   private accumulator = 0;
   private lastMs = 0;
-  private droppedSeconds = 0;
+  private droppedTotal = 0;
 
   constructor(opts: GameLoopOptions) {
     this.update = opts.update;
@@ -99,14 +104,14 @@ export class GameLoop {
 
   /** Simulation seconds abandoned to clamping, i.e. the spiral the guard ate. */
   get droppedSeconds(): number {
-    return this.droppedSeconds;
+    return this.droppedTotal;
   }
 
   start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
     this.accumulator = 0;
-    this.droppedSeconds = 0;
+    this.droppedTotal = 0;
     this.lastMs = this.now();
     this.handle = this.raf(this.frame);
   }
@@ -127,12 +132,12 @@ export class GameLoop {
   stepFrame(nowMs: number): void {
     if (!this.isRunning) return;
     const frameDt = this.advance(nowMs);
-    let steps = Math.floor(this.accumulator / this.step);
+    let steps = Math.floor((this.accumulator + STEP_EPSILON) / this.step);
     if (steps > this.maxCatchUpSteps) {
       steps = this.maxCatchUpSteps;
       const overflow = (this.accumulator - steps * this.step) / 1000;
       this.accumulator = 0;
-      this.droppedSeconds += overflow > 0 ? overflow : 0;
+      this.droppedTotal += overflow > 0 ? overflow : 0;
     } else {
       this.accumulator -= steps * this.step;
     }

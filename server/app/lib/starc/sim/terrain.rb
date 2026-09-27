@@ -22,7 +22,13 @@ module Starc
 
       MASK = 0xFFFF_FFFF
       UINT32_RANGE = 4_294_967_296.0
-      TWO_POW_32 = 4_294_967_296
+      # Integer, deliberately. The product `h * 1274126177` reaches ~5.5e18,
+      # far past Float64's 2^53 exact range, so doing this in floating point
+      # rounds it and changes the hash for most lattice points. The TypeScript
+      # half uses `Math.imul`, which returns the exact low 32 bits; this side
+      # uses Ruby bignum arithmetic, and `& 0xFFFFFFFF` is the same operation.
+      # See the implementer warning in shared/TERRAIN.md.
+      MIX_MULTIPLIER = 1_274_126_177
 
       class << self
         # Height fields are immutable and expensive to build (O(size^2) fBm),
@@ -124,7 +130,7 @@ module Starc
         return { "x" => @size / 2.0, "y" => @size / 2.0 } if positions.empty?
 
         p = positions[slot.to_i % positions.size]
-        { "x" => p["x"].to_f, "y" => p["y"].to_f }
+        { "x" => p["x"].to_f, "z" => p["z"].to_f }
       end
 
       def mineral_clusters
@@ -197,13 +203,30 @@ module Starc
         lerp(lerp(a, b, ux), lerp(c, d, ux), uz)
       end
 
-      # Accumulate on the signed 64-bit value, then reduce once mod 2^32, so
-      # negative lattice coordinates wrap exactly like the TypeScript `% 2^32`.
+      # The lattice hash from shared/TERRAIN.md, mirrored operation for
+      # operation from `client/src/render/terrain/heightfield.ts`.
+      #
+      # Two details are load-bearing and must not be "cleaned up":
+      #
+      #   * The first accumulation is done on the signed 64-bit value and
+      #     reduced once, so negative lattice coordinates wrap exactly like
+      #     the TypeScript `% 2^32`. It stays well inside 2^53, so integers are
+      #     bit-identical to the reference's doubles here.
+      #
+      #   * The second multiply is done in **exact integer** arithmetic. The
+      #     product reaches ~5.5e18, well past Float64's 2^53 exact range, so
+      #     doing it as a double silently rounds and changes the hash for most
+      #     lattice points. The TypeScript half uses `Math.imul`, which returns
+      #     the exact low 32 bits; `& 0xFFFFFFFF` is the same operation in Ruby
+      #     bignum. Both sides are exact, so they are bit-identical. Doing this
+      #     in Float to "match an old double-based implementation" is the bug
+      #     that desynchronised the height field by ~2e-6 — see the implementer
+      #     warning in shared/TERRAIN.md.
       def lattice(ix, iz)
         h = (ix * 374_761_393) + (iz * 668_265_263) + (@terrain_seed * 2_654_435_761)
         h &= MASK
         h ^= h >> 13
-        h = (h * 1_274_126_177) & MASK
+        h = (h * MIX_MULTIPLIER) & MASK
         h ^= h >> 16
         h / UINT32_RANGE
       end

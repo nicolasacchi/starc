@@ -47,7 +47,10 @@ module Starc
             next if st.nil?
 
             st[:supply_used] = used[pid]
-            st[:supply_max] = Starc::GameData.base_supply + provided[pid]
+            # The main base's own `supply_provided` IS the base allowance.
+            # Adding `base_supply` on top would hand a fresh player 20 supply
+            # instead of 10, making every map easier than it was designed to be.
+            st[:supply_max] = [provided[pid], Starc::GameData.base_supply].max
             st[:army_value] = army[pid]
             st[:alive] = alive.key?(pid)
           end

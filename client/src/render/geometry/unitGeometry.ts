@@ -17,6 +17,11 @@
  *  - horizontal extent stays inside the collision radius and the silhouette
  *    tops out at the roster height, so what you see is what the server blocks.
  *
+ * `unitGeometry` hands back the shared, reference-counted buffer from
+ * `geometryCache` (ask once per entity type; release when done), so a hundred
+ * Marines are one buffer. `buildAnyGeometry` is the uncached builder, used by
+ * the self-check and by anything that wants a throwaway copy.
+ *
  * This module and `buildingGeometry.ts` reference each other: each is the
  * other's fallback for a key of the wrong kind, so neither entry point throws
  * for any of the 57 roster keys. They only call each other at build time,
@@ -33,11 +38,9 @@ import {
   cone,
   fitFootprint,
   hexPrism,
-  mergeGroups,
   mulberry32,
   octahedron,
   panelLineOverlay,
-  setPartColor,
   sphereLowPoly,
   taperedBox,
   torusSegment,
@@ -46,12 +49,8 @@ import {
   wingShape,
 } from "./shapes";
 import type { PartTone } from "./shapes";
-import { buildingGeometry } from "./buildingGeometry";
-
-/** Material group holding the hovering hull of an air unit. */
-export const AIR_BODY_GROUP = 0;
-/** Material group holding the ground shadow decal of an air unit. */
-export const AIR_SHADOW_GROUP = 1;
+import { buildBuildingGeometry } from "./buildingGeometry";
+import { geometryCache } from "./geometryCache";
 
 /** Horns, spines and gun muzzles that point forward and slightly up. */
 const FORWARD_TILT = 1.27;
@@ -356,7 +355,7 @@ function wings(b: Build, span: number, chord: number, y: number, x: number, tilt
 function nacelles(b: Build, count: number, spread: number, y: number, z: number, r: number, len: number): void {
   for (let i = 0; i < count; i++) {
     if (count > 2 && i % 2 === 1) continue;
-    const x = count === 1 ? 0 : (count === 2 ? (i === 0 ? -1 : 1) : 0) * spread * (i < count / 2 ? -1 : 1);
+    const x = count === 1 ? 0 : (i % 2 === 0 ? -spread : spread);
     b.parts.add(taperedBox(r * 2.4, r * 2, len, 0.7), TONES.plate, { x, y, z: z + len });
     b.parts.add(chamferedCylinder(r * 0.9, r * 0.75, r * 0.5, 8), TONES.energy, {
       x,
@@ -1048,21 +1047,25 @@ const UNIT_BUILDERS: Record<string, UnitBuilder> = {
   guardian,
 };
 
-/** How far a hovering hull floats above its shadow decal, in metres. */
+/** How far a hovering hull floats above its ground contact, in metres. */
 export function airHoverLift(height: number): number {
   return Math.min(0.45, Math.max(0.12, height * 0.14));
 }
 
 /**
- * Builds the unit for `typeKey`. Building keys are delegated to
- * `buildingGeometry`, so this never throws for any of the 57 roster keys; an
- * unknown key is a hard error, because quietly rendering a placeholder would
- * hide a roster/mesh mismatch.
+ * The shared, reference-counted unit geometry for `typeKey`. Building keys
+ * are dispatched to the building builders, so this never throws for any of
+ * the 57 roster keys; an unknown key is a hard error, because quietly
+ * rendering a placeholder would hide a roster/mesh mismatch.
  */
 export function unitGeometry(typeKey: string): THREE.BufferGeometry {
+  return geometryCache.acquire(typeKey, buildAnyGeometry);
+}
+
+/** Uncached builder for any roster key. `unitGeometry` wraps this in the cache. */
+export function buildAnyGeometry(typeKey: string): THREE.BufferGeometry {
   const def = entityDef(typeKey);
-  if (def.kind === "building") return buildingGeometry(typeKey);
-  return assemble(def);
+  return def.kind === "building" ? buildBuildingGeometry(typeKey) : assemble(def);
 }
 
 function assemble(def: UnitDef): THREE.BufferGeometry {
@@ -1073,23 +1076,16 @@ function assemble(def: UnitDef): THREE.BufferGeometry {
     radius: def.size.radius,
     height: def.size.height,
     air: def.movement === "air",
-    parts: new PartList("body"),
+    parts: new PartList(),
   };
   builder(build);
+  // Air hulls float: the clearance comes out of the height budget so the
+  // silhouette still tops out at the roster height.
   const lift = build.air ? airHoverLift(def.size.height) : 0;
   const body = build.parts.merge();
   fitFootprint(body, def.size.radius, def.size.height - lift);
-  if (!build.air) return body;
-  body.translate(0, lift, 0);
-  return withShadowDecal(body, def.size.radius);
-}
-
-/** Flat dark disc on the ground under a hovering hull. */
-function withShadowDecal(body: THREE.BufferGeometry, radius: number): THREE.BufferGeometry {
-  const decal = chamferedCylinder(radius * 1.05, radius * 1.05, 0.02, 14);
-  decal.translate(0, 0.01, 0);
-  setPartColor(decal, { r: 0.1, g: 0.1, b: 0.12 });
-  return mergeGroups([body, decal]);
+  if (lift > 0) body.translate(0, lift, 0);
+  return body;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1121,7 +1117,7 @@ export function selfCheckGeometryCoverage(): GeometryCheck[] {
     let reason = "ok";
     let triangles = 0;
     try {
-      geometry = unitGeometry(key);
+      geometry = buildAnyGeometry(key);
       triangles = (geometry.getAttribute("position").count / 3) | 0;
       geometry.computeBoundingBox();
       const box = geometry.boundingBox;

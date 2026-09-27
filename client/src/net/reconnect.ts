@@ -3,10 +3,11 @@
  *
  * Backoff is exponential from 500 ms, doubling, capped at 15 s, with *full
  * jitter* — the actual wait is `random() * min(cap, base * factor^n)` rather
- * than the raw exponential. Full jitter is the variant that actually de-synchronises
- * a thundering herd of clients after a server restart; a fixed schedule just
- * replays the same collision one second later. A hard attempt budget stops a
- * client from reconnecting forever against a server that is genuinely gone.
+ * than the raw exponential. Full jitter is the variant that actually
+ * de-synchronises a thundering herd of clients after a server restart; a fixed
+ * schedule just replays the same collision one second later. A hard attempt
+ * budget stops a client from reconnecting forever against a server that is
+ * genuinely gone.
  *
  * The resync path is the part that matters for correctness. A reconnect lands
  * us in the middle of a match whose world has moved on: our snapshot buffer and
@@ -16,6 +17,13 @@
  * (PROTOCOL.md §3, §5 — full tables are what make reconnects free). Before that
  * stream lands, `onResync` discards the stale state, so the renderer never draws
  * a ghost from before the drop.
+ *
+ * One subtlety this class owns: the transport reports "connected" from inside
+ * the attempt this controller started. If that cancelled the loop before the
+ * attempt resolved, the resync would never run — which is precisely how a
+ * reconnect ends up drawing the pre-drop world. So `notifyConnected` only
+ * clears the *pending retry*, never the in-flight attempt, and the resync is
+ * driven by the attempt's own resolution.
  */
 export const RECONNECT_BASE_MS = 500;
 export const RECONNECT_FACTOR = 2;
@@ -75,6 +83,8 @@ export class ReconnectController {
   private attemptCount = 0;
   private running = false;
   private inFlight = false;
+  /** Set by {@link ReconnectController.stop}: never resync after a real quit. */
+  private stopped = false;
 
   constructor(attempt: (attempt: number) => Promise<void>, options: ReconnectOptions = {}) {
     this.attemptFn = attempt;
@@ -94,7 +104,7 @@ export class ReconnectController {
     return this.attemptCount;
   }
 
-  /** True while the backoff loop is scheduled or attempting. */
+  /** True while a backoff retry is pending. */
   get active(): boolean {
     return this.running;
   }
@@ -102,6 +112,15 @@ export class ReconnectController {
   /** True while a connect attempt is in flight. */
   get connecting(): boolean {
     return this.inFlight;
+  }
+
+  /**
+   * True while this controller owns the connection: a retry is pending or an
+   * attempt is in flight. Callers use it to avoid re-subscribing behind the
+   * resync's back.
+   */
+  get recovering(): boolean {
+    return this.running || this.inFlight;
   }
 
   /**
@@ -119,28 +138,34 @@ export class ReconnectController {
   }
 
   /**
-   * Reports that the connection dropped. Schedules the first attempt; calling
-   * it again while a loop is running is a no-op, so transport state changes
-   * and manual retries can both drive it safely.
+   * Reports that the connection dropped. Schedules the first attempt; calling it
+   * again while a loop is running is a no-op, so transport state changes and
+   * manual retries can both drive it safely.
    */
   notifyLoss(): void {
     if (this.running) return;
+    this.stopped = false;
     this.running = true;
     this.attemptCount = 0;
     this.scheduleNext();
   }
 
-  /** Reports a live connection: cancels any pending retry and resets the budget. */
+  /**
+   * Reports a live connection: cancels the pending retry and resets the budget.
+   * The in-flight flag is deliberately left alone — a transport that reports
+   * "connected" from inside our own attempt must not cancel the resync that
+   * follows it.
+   */
   notifyConnected(): void {
     this.cancelTimer();
     this.running = false;
-    this.inFlight = false;
     this.attemptCount = 0;
   }
 
   /** Abandons reconnection without notifying anyone — an explicit disconnect. */
   stop(): void {
     this.cancelTimer();
+    this.stopped = true;
     this.running = false;
     this.inFlight = false;
   }
@@ -158,7 +183,7 @@ export class ReconnectController {
   }
 
   private async run(attempt: number): Promise<void> {
-    if (!this.running) return;
+    if (this.stopped || !this.running) return;
     if (attempt > this.maxAttempts) {
       this.giveUp(attempt - 1);
       return;
@@ -168,7 +193,7 @@ export class ReconnectController {
       await this.attemptFn(attempt);
     } catch {
       this.inFlight = false;
-      if (!this.running) return;
+      if (this.stopped || !this.running) return;
       this.attemptCount = attempt;
       if (attempt >= this.maxAttempts) {
         this.giveUp(attempt);
@@ -178,9 +203,9 @@ export class ReconnectController {
       return;
     }
     this.inFlight = false;
-    if (!this.running) return;
     this.running = false;
     this.attemptCount = 0;
+    if (this.stopped) return;
     // Success: the caller still has to throw away its stale world state before
     // the first fresh snapshot is drawn.
     this.onResync?.(attempt);
