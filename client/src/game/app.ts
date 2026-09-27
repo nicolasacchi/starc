@@ -123,6 +123,13 @@ export interface AppOptions {
   cableUrl?: string;
   quality?: QualityPreset;
   now?: () => number;
+  /**
+   * Builds the renderer for a match. Defaults to the real `SceneManager`; the
+   * seam exists because the scene owns a WebGL context, and without it the
+   * match-entry flow — the part that decides whether a match ever plays — can
+   * only be exercised in a browser.
+   */
+  sceneFactory?: (canvas: HTMLCanvasElement, map: MapDef, playerId: number) => SceneManager;
 }
 
 /** A listener registration to undo on teardown. */
@@ -557,7 +564,9 @@ export class App implements UiHost {
     canvas: HTMLCanvasElement,
     hudHost: HTMLElement,
   ): void {
-    const scene = new SceneManager(canvas, map, settingsFor(this.quality), this.myPlayerId);
+    const scene = this.opts.sceneFactory
+      ? this.opts.sceneFactory(canvas, map, this.myPlayerId)
+      : new SceneManager(canvas, map, settingsFor(this.quality), this.myPlayerId);
     this.scene = scene;
     this.terrain = heightField(map);
 
@@ -787,9 +796,17 @@ export class App implements UiHost {
     if (!this.state.started) return;
     this.state.applySnapshot({ tick: msg.tick, entities: msg.entities, events: msg.events });
     this.state.setAck(msg.ack);
+    // The scene keeps its own interpolation pair, so it takes the raw 10 Hz
+    // table exactly as it arrived. This is the *only* thing that ever puts a
+    // unit on the screen: the state holder and the HUD are readouts, not
+    // drawing, so a snapshot that stops here leaves an empty world behind
+    // fully populated readouts. It also plays the events, before diffing, so
+    // a `death` still finds the view it is about to remove.
+    this.scene?.applySnapshot({ tick: msg.tick, entities: msg.entities, events: msg.events });
     this.refreshHud();
+    // `applySnapshot` has already turned the alerts into floating text; the
+    // toast is the HUD's own half of the same event.
     for (const event of msg.events) {
-      this.scene?.playEvents([event]);
       if (event.e === "alert") this.hud?.alert(event.text, "warn");
     }
   }
