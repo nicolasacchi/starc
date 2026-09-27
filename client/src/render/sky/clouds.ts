@@ -194,6 +194,11 @@ export function createClouds(
     // the renderer reads, so the low preset gets one unshadowed sheet at two
     // octaves and still shows a sky with weather in it.
     defines: {
+      // `CLOUD_CEILING` is read by the sheet code inside the GLSL, so it has
+      // to reach the shader as a define: a TypeScript const is not in scope
+      // inside the fragment string, and a missing declaration there is a hard
+      // compile error that takes the whole render loop down with it.
+      CLOUD_CEILING: CLOUD_CEILING.toFixed(1),
       CLOUD_SHEETS: settings.postFx ? (settings.terrainLodRings >= 4 ? 3 : 2) : 1,
       CLOUD_OCTAVES: settings.postFx ? (settings.terrainLodRings >= 4 ? 4 : 3) : 2,
       ...(settings.postFx ? { CLOUD_SHADOW: "" } : {}),

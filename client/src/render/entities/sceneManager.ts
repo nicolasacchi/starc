@@ -270,13 +270,6 @@ export class SceneManager {
     this.environment = this.renderer === null
       ? null
       : new EnvironmentProbe(this.scene, this.renderer, settings);
-
-    // TEMP-BISECT
-    (globalThis as unknown as { __dbg: unknown }).__dbg = {
-      scene: this.scene,
-      renderer: this.renderer,
-      THREE,
-    };
     this.particles = new ParticleSystem(this.scene, settings);
     this.explosions = new ExplosionSystem(this.scene, settings, this.terrain);
     this.projectiles = new ProjectileSystem(this.scene, settings, this.terrain);

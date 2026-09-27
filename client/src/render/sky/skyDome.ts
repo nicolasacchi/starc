@@ -86,12 +86,9 @@ export class SkyDome {
     this.moonPhase = 0.55 + 0.42 * Math.abs(Math.sin((map.terrain_seed ?? 1) * 0.0173));
     mapTint.setStyle(map.lighting?.sun_color ?? "#ffffff", THREE.SRGBColorSpace);
 
-    this.handle = createSkyMaterial({
-      turbidity: this.turbidity,
-      // The star field's galactic band costs a 3D fBm; the low preset drops it
-      // rather than the stars themselves.
-      luminance: 0.04,
-    });
+    // The exposure is the sky material's own calibrated default; the dome only
+    // supplies what actually varies per map.
+    this.handle = createSkyMaterial({ turbidity: this.turbidity });
     this.uniforms = this.handle.uniforms;
     this.uniforms.uMoonPhase.value = this.moonPhase;
     this.uniforms.uStarIntensity.value = settings.terrainLodRings >= 3 ? 1 : 0.8;

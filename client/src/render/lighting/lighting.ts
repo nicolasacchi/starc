@@ -131,6 +131,20 @@ const ZENITH_NIGHT = 0x04060e;
 const HORIZON_NIGHT = 0x0c1226;
 const MOON_TINT = 0x93a9d8;
 
+/**
+ * The pale neutral a long air path scours a horizon down to. The sun's own
+ * colour is leaned towards this rather than towards the zenith, so the
+ * skyline keeps its warmth instead of turning grey between two complements.
+ */
+const HAZE_HORIZON = new THREE.Color().setHex(0xd7dce4, THREE.SRGBColorSpace);
+
+/**
+ * How far the fog leans from the horizon colour towards the zenith. The haze
+ * sits in front of the skyline, so it wants the horizon's colour; a larger
+ * share of zenith only cools it and greys the whole far field.
+ */
+export const FOG_ZENITH_MIX = 0.25;
+
 const _temp = new THREE.Color();
 const _dayColor = new THREE.Color();
 const _nightColor = new THREE.Color();
@@ -205,11 +219,15 @@ export function sunStateFor(timeOfDay: number, out: SunState, mapTint?: THREE.Co
   // The horizon is the sun's own colour washed towards the zenith — that is
   // what makes low sun bleed orange across the whole skyline.
   _horizon.lerp(out.skyZenith, 0.25);
-  // How far the horizon leans on the zenith rather than on the sun's own
-  // colour. A high sun gives a pale blue-white skyline; a low sun gives a warm
-  // one, which is the whole point of having a separate horizon colour.
-  const horizonMix = clamp01(0.72 - 0.42 * warmth);
-  _temp.copy(out.color).lerp(out.skyZenith, horizonMix);
+  // A hazy horizon is the sun's own colour scoured pale by the long air path
+  // it travelled — not a blend of the sun and the zenith. Those two are close
+  // to complementary, so a straight mix between them passes through grey and
+  // every low-sun skyline read mauve. The zenith is folded in only as far as
+  // the sun being high actually justifies, and a pale haze does the rest.
+  const horizonZenith = 0.08 + 0.32 * (1 - warmth) * (1 - warmth);
+  const horizonHaze = 0.36 + 0.22 * (1 - warmth);
+  _temp.copy(out.color).lerp(out.skyZenith, horizonZenith);
+  _temp.lerp(HAZE_HORIZON, horizonHaze);
   out.skyHorizon.copy(_horizon).lerp(_temp, w);
 
   if (groundTint) {
@@ -386,7 +404,7 @@ export class LightingRig {
     this.fill.intensity = (0.08 + 0.2 * day) * this.lightFade;
     this.fill.position.set(-state.direction.x, 0.5, -state.direction.z).normalize().multiplyScalar(50);
 
-    if (this.fog) this.fog.color.copy(state.skyHorizon).lerp(state.skyZenith, 0.35);
+    if (this.fog) this.fog.color.copy(state.skyHorizon).lerp(state.skyZenith, FOG_ZENITH_MIX);
   }
 
   private applyKey(): void {

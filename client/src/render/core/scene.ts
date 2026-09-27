@@ -14,7 +14,7 @@
 import * as THREE from "three";
 import type { MapDef } from "@shared/protocol";
 import type { QualitySettings } from "./quality";
-import { createSunState, sunStateFor } from "@render/lighting/lighting";
+import { FOG_ZENITH_MIX, createSunState, sunStateFor } from "@render/lighting/lighting";
 
 /**
  * Converts a map's authored `fog_density` into the coefficient this client
@@ -44,7 +44,7 @@ export function fogColorFor(map: MapDef): THREE.Color {
   const timeOfDay = THREE.MathUtils.clamp(map.lighting?.time_of_day ?? 0.5, 0, 1);
   const mapTint = new THREE.Color().setStyle(map.lighting?.sun_color ?? "#ffffff", THREE.SRGBColorSpace);
   const state = sunStateFor(timeOfDay, createSunState(), mapTint);
-  return state.skyHorizon.clone().lerp(state.skyZenith, 0.35);
+  return state.skyHorizon.clone().lerp(state.skyZenith, FOG_ZENITH_MIX);
 }
 
 /**

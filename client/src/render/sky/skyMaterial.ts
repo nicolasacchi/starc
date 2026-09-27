@@ -137,9 +137,13 @@ export function createSkyUniforms(): SkyUniforms {
     // EE, the Preetham solar constant; scSunDiscIntensity returns the 0..1
     // fraction of it that is above the horizon.
     uSunIntensity: { value: 1000 },
-    // The exposure the Preetham radiance is displayed at; 0.04 puts a noon
-    // zenith at roughly 0.35 before tone mapping.
-    uSkyLuminance: { value: 0.04 },
+    // The exposure the Preetham radiance is displayed at. 0.04 was calibrated
+    // against the zenith alone and clipped the entire low sky to white: an
+    // RTS camera looks along the horizon, so 0-15 deg of elevation is the band
+    // that is actually on screen, and it has to sit inside the tone curve for
+    // the sky to read as blue rather than as fog. 0.012 puts the zenith at a
+    // deep blue and leaves the 1 deg horizon a believable pale haze.
+    uSkyLuminance: { value: 0.012 },
     uSunDiscColor: { value: new THREE.Color(1, 1, 1) },
     uNight: { value: 0 },
     uMoonDirection: { value: new THREE.Vector3(0, -1, 0) },

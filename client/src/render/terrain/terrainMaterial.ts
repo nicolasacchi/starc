@@ -234,6 +234,35 @@ interface Palette {
   aoStrength: number;
 }
 
+
+/**
+ * The height at which the given fraction of the map's terrain lies below.
+ *
+ * A snow line placed at a fraction of the *maximum* height is not a snow line:
+ * height fields are heavily skewed towards their low ground, so on Altaior
+ * (median 5.9 m, max 10.9 m) 0.62 of the maximum put snow on more than half
+ * of a map described as rolling green hills. Placing the line by covered area
+ * instead makes `snowAmount` mean what it says on every map, whatever its
+ * height distribution happens to be. A 256-bin histogram over the range keeps
+ * this O(n) rather than sorting the whole grid.
+ */
+function heightPercentile(grid: ArrayLike<number>, min: number, max: number, fraction: number): number {
+  const bins = 256;
+  const histogram = new Uint32Array(bins);
+  const span = Math.max(max - min, 1e-6);
+  for (let i = 0; i < grid.length; i++) {
+    const t = Math.min(Math.max((grid[i] - min) / span, 0), 0.9999);
+    histogram[Math.floor(t * bins)]++;
+  }
+  const want = grid.length * Math.min(Math.max(fraction, 0), 1);
+  let seen = 0;
+  for (let b = 0; b < bins; b++) {
+    seen += histogram[b];
+    if (seen >= want) return min + ((b + 1) / bins) * span;
+  }
+  return max;
+}
+
 const PALETTES: Record<string, Palette> = {
   grassland: {
     rock: "#6b6a63",
@@ -564,13 +593,14 @@ vec4 scDirt = texture2D( uDirtMap, scUvDirt, scBias );
 vec4 scSnow = texture2D( uSnowMap, scUvSnow, scBias );
 
 // --- splat weights: slope drives rock, height drives snow and the beach ---
-// The beach band is a fraction of the map's own relief rather than a fixed
-// number of metres, so raising a map's elevation does not turn half of it
-// into shoreline.
+// The beach and snow bands are fractions of the map's own relief rather than
+// fixed numbers of metres, so raising a map's elevation does not turn half of
+// it into shoreline — and, on a low-relief map, a fixed 3 m snow band was
+// wide enough to swallow a third of the whole terrain.
 float scSlope = scField.a + ( scMask - 0.5 ) * 0.30;
 float scRockW = smoothstep( 0.34, 0.72, scSlope );
 float scSnowW = uSnowAmount
-  * smoothstep( uSnowLine - 1.0, uSnowLine + 2.2, scH + ( scMask - 0.5 ) * 2.2 )
+  * smoothstep( uSnowLine - uRelief * 0.04, uSnowLine + uRelief * 0.09, scH + ( scMask - 0.5 ) * uRelief * 0.20 )
   * ( 1.0 - smoothstep( 0.34, 0.72, scSlope ) );
 float scShore = uWaterLevel + uRelief * 0.11;
 float scDirtW = smoothstep( scShore, uWaterLevel + uRelief * 0.004, scH + ( scMask - 0.5 ) * uRelief * 0.05 ) * ( 0.5 + 0.5 * scMask );
@@ -727,7 +757,7 @@ export function createTerrainMaterial(
     uLevelHalf: { value: levelCells },
     uWaterLevel: { value: TERRAIN_WATER_LEVEL },
     uRelief: { value: relief },
-    uSnowLine: { value: maxHeight * 0.62 },
+    uSnowLine: { value: heightPercentile(field.grid, minHeight, maxHeight, 1 - palette.snowAmount) },
     uSnowAmount: { value: palette.snowAmount },
     uAoStrength: { value: palette.aoStrength },
     uTintRock: { value: new THREE.Color(palette.rock) },
@@ -737,13 +767,17 @@ export function createTerrainMaterial(
     uGrade: { value: new THREE.Color(palette.grade) },
     uGradeAmount: { value: palette.gradeAmount },
     // The detail and mask fades are in *view* metres, and the RTS rig stands
-    // ~70 m up: the ground under the focus point is 150 m away, not 30. The
-    // old 28/150 pair left the near ground at 17% detail strength and the far
-    // ground with none, which is why a nearly flat height field rendered as a
-    // featureless sheet. These ranges bracket the rig's own 40 m … 500 m span.
-    uDetailNear: { value: 90 },
-    uDetailFar: { value: 520 },
-    uMaskNear: { value: 160 },
+    // ~70 m up: the ground under the focus point is 150 m away, not 30.
+    //
+    // The detail fade has to finish well before the far clipmap rings, though.
+    // The grass layer tiles every 5 m and carries 4 octaves, so its smallest
+    // features are half a metre; past ~190 m a texel is thinner than a pixel
+    // and keeping the detail on aliased it into a salt-and-pepper carpet that
+    // read as gravel rather than as receding land. The splat mask is built
+    // from much larger features, so it can stay on far further out.
+    uDetailNear: { value: 70 },
+    uDetailFar: { value: 260 },
+    uMaskNear: { value: 200 },
     uMaskFar: { value: 700 },
     uNormalStrength: { value: 0.85 },
     uRockMap: { value: albedo[0] },
