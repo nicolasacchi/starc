@@ -15,6 +15,9 @@ require "rails_helper"
 # stepping afterwards, and what actually landed in the database.
 RSpec.describe "A match that is finished", type: :request do
   include ActionCable::TestHelper
+  # The forfeit is decided by a real tick thread; it must not outlive the
+  # example that started it.
+  include MatchRunnerTeardown
 
   def post_json(path, payload = {}, token = nil)
     post path, params: payload.to_json,

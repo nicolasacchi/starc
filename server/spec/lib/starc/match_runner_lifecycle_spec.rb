@@ -22,8 +22,11 @@ RSpec.describe Starc::MatchRunner, "presence, endings and the end-of-match write
 
   before do
     stub_const("Starc::MatchRunner::FORFEIT_GRACE_MS", grace_ms)
-    reset_registry!
+    # Stop before the reset: `reset_registry!` empties the registry, and a
+    # runner that is forgotten with its tick thread still alive goes on
+    # broadcasting into the next example's adapter.
     described_class.stop_all!
+    reset_registry!
     @previous_pubsub = ActionCable.server.instance_variable_get(:@pubsub)
     @pubsub = ActionCable::SubscriptionAdapter::Test.new(ActionCable.server)
     ActionCable.server.instance_variable_set(:@pubsub, @pubsub)

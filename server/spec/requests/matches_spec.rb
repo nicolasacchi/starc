@@ -5,6 +5,9 @@ require "rails_helper"
 # Lobby lifecycle: index, show, create, join, leave, ready, start, forfeit.
 RSpec.describe "Api::V1 matches", type: :request do
   include ActionCable::TestHelper
+  # A match started through these endpoints is simulated for real; its tick
+  # thread must not outlive the example that started it.
+  include MatchRunnerTeardown
 
   def post_json(path, payload = {}, token = nil)
     post path, params: payload.to_json,
