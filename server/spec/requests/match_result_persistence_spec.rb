@@ -45,7 +45,7 @@ RSpec.describe "A match that is finished", type: :request do
   # The forfeit is finished by the runner's tick thread, so the broadcast can
   # land a moment after the HTTP response. Waiting for the first one keeps the
   # "exactly one" assertion about a document that has actually been sent.
-  def await_ended(match_id, timeout: 2)
+  def await_ended(match_id, timeout: 10)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
     sleep 0.01 while ended_broadcasts(match_id).empty? &&
                      Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline

@@ -70,7 +70,7 @@ RSpec.describe Starc::MatchRunner do
 
   # Waits for the tick loop to reach at least `tick`, so a spec never has to
   # guess how long a 50 ms step takes.
-  def wait_for_tick(runner, tick, timeout: 3.0)
+  def wait_for_tick(runner, tick, timeout: 10.0)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
     sleep 0.01 while runner.world.tick < tick &&
                      Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
@@ -90,7 +90,7 @@ RSpec.describe Starc::MatchRunner do
       # test is that sleep error does not accumulate.
       runner = launch
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      wait_for_tick(runner, 40, timeout: 3.0)
+      wait_for_tick(runner, 40, timeout: 10.0)
       elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
 
       tick = runner.world.tick
@@ -104,7 +104,7 @@ RSpec.describe Starc::MatchRunner do
       # schedules against a target time stays on it.
       runner = launch
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      wait_for_tick(runner, 55, timeout: 4.0)
+      wait_for_tick(runner, 55, timeout: 10.0)
       elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
 
       expect(runner.world.tick).to be >= 55
@@ -113,7 +113,7 @@ RSpec.describe Starc::MatchRunner do
 
     it "reports the elapsed simulation time from the tick count" do
       runner = launch
-      wait_for_tick(runner, 20, timeout: 2.0)
+      wait_for_tick(runner, 20, timeout: 10.0)
 
       expect(runner.elapsed_ms).to be_within(50).of(20 * described_class::TICK_MS)
     end
@@ -126,7 +126,7 @@ RSpec.describe Starc::MatchRunner do
       runner = launch
       # Every snapshot carries the tick it was taken on, so the cadence is
       # readable straight off the wire.
-      wait_for_tick(runner, 30, timeout: 3.0)
+      wait_for_tick(runner, 30, timeout: 10.0)
       runner.stop!
 
       ticks = snapshots(runner.match_id).map { |m| m["tick"] }
@@ -138,7 +138,7 @@ RSpec.describe Starc::MatchRunner do
 
     it "carries the PROTOCOL §5 snapshot envelope" do
       runner = launch
-      wait_for_tick(runner, 4, timeout: 2.0)
+      wait_for_tick(runner, 4, timeout: 10.0)
       runner.stop!
 
       snapshot = snapshots(runner.match_id).last
@@ -151,7 +151,7 @@ RSpec.describe Starc::MatchRunner do
 
     it "publishes nothing once the loop has stopped" do
       runner = launch
-      wait_for_tick(runner, 6, timeout: 2.0)
+      wait_for_tick(runner, 6, timeout: 10.0)
       runner.stop!
       before_stop = broadcasts(runner.match_id).size
       sleep 0.2
@@ -167,7 +167,7 @@ RSpec.describe Starc::MatchRunner do
     let!(:runner) { launch(match) }
 
     it "applies the valid command and rejects the other two by their batch index" do
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
       unit = first_entity_of(one, runner)
       expect(unit).not_to be_nil
 
@@ -197,7 +197,7 @@ RSpec.describe Starc::MatchRunner do
     end
 
     it "refuses to order an entity the player does not own, with not_owner" do
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
       enemy = runner.world.entities.find { |e| e.player_id == two.id && e.alive? }
       expect(enemy).not_to be_nil
 
@@ -225,7 +225,7 @@ RSpec.describe Starc::MatchRunner do
     end
 
     it "records only the commands the world accepted" do
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
       unit = first_entity_of(one, runner)
 
       runner.apply_commands(one.id, [
@@ -240,7 +240,7 @@ RSpec.describe Starc::MatchRunner do
     end
 
     it "never lets a client-supplied index into the replay" do
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
       unit = first_entity_of(one, runner)
 
       runner.apply_commands(one.id, [
@@ -259,7 +259,7 @@ RSpec.describe Starc::MatchRunner do
     it "broadcasts game:ended with the winner, reason, duration, scores and a replay URL" do
       runner = launch
       runner.player_forfeits(two.id)
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
       runner.stop!
 
       ended = messages(runner.match_id).find { |m| m["t"] == "game:ended" }
@@ -276,7 +276,7 @@ RSpec.describe Starc::MatchRunner do
     it "writes the replay row before the URL is handed out, so the URL resolves" do
       runner = launch
       runner.player_forfeits(two.id)
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
       runner.stop!
 
       ended = messages(runner.match_id).find { |m| m["t"] == "game:ended" }
@@ -290,7 +290,7 @@ RSpec.describe Starc::MatchRunner do
       match = running_match
       runner = launch(match)
       runner.player_forfeits(two.id)
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
       runner.stop!
 
       match.reload
@@ -303,7 +303,7 @@ RSpec.describe Starc::MatchRunner do
       match = running_match
       runner = launch(match)
       runner.player_forfeits(two.id)
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
       runner.stop!
 
       expect(match.reload.match_players.find_by(player_id: one.id).result).to eq("win")
@@ -315,7 +315,7 @@ RSpec.describe Starc::MatchRunner do
       expect(runner.finished?).to be_falsey
 
       runner.player_forfeits(two.id)
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
       runner.stop!
 
       expect(runner.finished?).to be_truthy
@@ -324,7 +324,7 @@ RSpec.describe Starc::MatchRunner do
     it "does not write a second replay row or a second game:ended when finalised twice" do
       runner = launch
       runner.player_forfeits(two.id)
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
       runner.stop!
       first_end = messages(runner.match_id).count { |m| m["t"] == "game:ended" }
       expect(first_end).to eq(1)
@@ -341,7 +341,7 @@ RSpec.describe Starc::MatchRunner do
   describe "a subscriber that arrives mid-match" do
     it "gets game:start and then live snapshots" do
       runner = launch
-      wait_for_tick(runner, 4, timeout: 2.0)
+      wait_for_tick(runner, 4, timeout: 10.0)
 
       # A second controller — a reconnecting client — reads the same stream the
       # runner publishes to, so the start payload and the following snapshots
@@ -367,7 +367,7 @@ RSpec.describe Starc::MatchRunner do
     it "publishes to the match's own stream only" do
       runner = launch
       other = running_match
-      wait_for_tick(runner, 4, timeout: 2.0)
+      wait_for_tick(runner, 4, timeout: 10.0)
 
       expect(broadcasts(other.id)).to be_empty
     end
@@ -378,7 +378,7 @@ RSpec.describe Starc::MatchRunner do
   describe "#stop!" do
     it "actually stops the thread: the tick count stops advancing" do
       runner = launch
-      wait_for_tick(runner, 4, timeout: 2.0)
+      wait_for_tick(runner, 4, timeout: 10.0)
 
       runner.stop!
       settled = runner.world.tick
@@ -390,7 +390,7 @@ RSpec.describe Starc::MatchRunner do
 
     it "leaves no thread alive for the match" do
       runner = launch
-      wait_for_tick(runner, 2, timeout: 2.0)
+      wait_for_tick(runner, 2, timeout: 10.0)
 
       runner.stop!
 

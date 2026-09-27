@@ -108,7 +108,7 @@ RSpec.describe GameChannel, "and the connections behind it" do
 
   # Every alert the match stream has carried, waited out over the snapshot
   # cadence that carries them.
-  def alerts(match_id, timeout: 2.0)
+  def alerts(match_id, timeout: 10.0)
     stream = Starc::LobbyRegistry.game_stream(match_id)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
     loop do

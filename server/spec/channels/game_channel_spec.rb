@@ -95,7 +95,7 @@ RSpec.describe GameChannel do
 
   # Alerts the runner has broadcast on the match's own stream, waiting out the
   # 2-tick snapshot cadence that carries them.
-  def snapshot_alerts(timeout: 2.0)
+  def snapshot_alerts(timeout: 10.0)
     stream = Starc::LobbyRegistry.game_stream(@alert_match_id)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
     loop do

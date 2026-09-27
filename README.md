@@ -179,19 +179,58 @@ auto-detected from the GPU and can be forced in the menu.
 ## Testing
 
 ```bash
-bun run data:build        # validates the roster, rebuilds game-data.json
-cd server && bundle exec rspec        # models, requests, channels, simulation, e2e
-cd client && bun run test:run         # netcode, interpolation, input, graphics
-cd client && bun run typecheck        # strict tsc
-cd client && bun run build            # production bundle
+bun run data:build                            # validates the roster, rebuilds game-data.json
+cd server && bundle exec rspec                # 885 examples: models, requests, channels, simulation
+cd server && bundle exec rspec spec/e2e       # 3 examples: two real WebSocket clients play a full match
+cd client && bun run test:run                 # netcode, prediction, input, rendering
+cd client && bun run typecheck                # strict tsc
+cd client && bun run build                    # production bundle
 ```
 
-The simulation is deterministic, which is what makes replays real: feeding a
-replay's command list back into `Starc::Sim::World` from the same seed
-reproduces the final state exactly, and a spec asserts it. The Ruby and
-TypeScript terrain implementations are asserted to agree to within `1e-9`, and
-the e2e suite drives two real WebSocket clients through a full match against a
-running server.
+The suite is order-independent — verified at seeds 1, 2, 7, 42 and 99 — and
+`spec/e2e` is opt-in (`STARC_E2E=1` or by naming the path) because it boots a
+real Puma on a real port.
+
+The simulation is deterministic, which is what makes replays real. That is
+asserted, not assumed: the same seed and command stream produce byte-identical
+snapshots across separate processes and `RAILS_ENV` values; one batch of three
+commands and three batches of one agree; both players' commands applied in
+swapped order within a tick agree; and the `mulberry32` stream matches a
+canonical reference bit-exactly. The Ruby and TypeScript terrain
+implementations agree to `1e-9` — in practice bit-exactly — and a spec pins the
+table from both sides.
+
+The e2e suite is deliberately unmocked. A start position on the world edge, a
+snapshot cadence that is not 10 Hz, a rejection indexed against the wrong
+command, and a `replay_url` that 404s are exactly the defects a mocked channel
+cannot see.
+
+### What the tests did not catch, and the browser did
+
+Every defect below passed a fully green suite. They were found by driving the
+running application: logging in, creating a match, joining from a second
+account, and looking at the screen.
+
+- The **entire app shell had no CSS** — the shell emitted `starc-*` class names
+  and the stylesheet was written against a different vocabulary, so the game
+  screen rendered invisible.
+- The **3D world was never drawn**: `SceneManager.applySnapshot`, the only
+  method that creates entity views, had no caller anywhere. Terrain, sky and
+  the HUD all rendered; the world did not.
+- The **post-FX chain showed a radial smear instead of the world** on three of
+  four quality presets, and two further defects made the fourth draw black.
+- A **match started over REST never simulated** — the runner was only adopted
+  from the channel paths.
+- A **shared cable's second consumer never subscribed**, so entering a match
+  waited forever for a `game:start` on a channel it had never joined.
+- **Any account could end any live match** in 60 seconds with a fabricated
+  result, and **closing a second tab forfeited a match the player was still
+  playing**.
+
+The general lesson, recorded in `CLAUDE.md`: a test that exercises a helper in
+isolation proves nothing about whether production calls it. Three separate
+dead-but-fully-tested paths turned up in this codebase before an explicit sweep
+found seventeen more.
 
 ---
 
