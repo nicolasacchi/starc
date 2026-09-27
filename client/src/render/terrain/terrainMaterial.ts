@@ -649,10 +649,15 @@ export function createTerrainMaterial(
     uTintSnow: { value: new THREE.Color(palette.snow) },
     uGrade: { value: new THREE.Color(palette.grade) },
     uGradeAmount: { value: palette.gradeAmount },
-    uDetailNear: { value: 28 },
-    uDetailFar: { value: 150 },
-    uMaskNear: { value: 70 },
-    uMaskFar: { value: 320 },
+    // The detail and mask fades are in *view* metres, and the RTS rig stands
+    // ~70 m up: the ground under the focus point is 150 m away, not 30. The
+    // old 28/150 pair left the near ground at 17% detail strength and the far
+    // ground with none, which is why a nearly flat height field rendered as a
+    // featureless sheet. These ranges bracket the rig's own 40 m … 500 m span.
+    uDetailNear: { value: 90 },
+    uDetailFar: { value: 520 },
+    uMaskNear: { value: 160 },
+    uMaskFar: { value: 700 },
     uNormalStrength: { value: 0.85 },
     uRockMap: { value: albedo[0] },
     uGrassMap: { value: albedo[1] },

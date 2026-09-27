@@ -14,6 +14,11 @@
  *
  * It is lifted three centimetres above the terrain's zero plane so it is never
  * coplanar with the flat map border; see WATER_SURFACE_LIFT.
+ *
+ * A map without water gets no plane at all. The height field's border falloff
+ * drives the ground to exactly zero outside the playable square, so a sea laid
+ * over a land map does not sit in low ground — it floods the entire off-map
+ * skirt, which is most of what an RTS camera looks at.
  */
 import * as THREE from "three";
 import type { MapDef } from "@shared/protocol";
@@ -98,12 +103,17 @@ export interface WaterPlane {
   dispose(): void;
 }
 
+/**
+ * The water for a map, or `null` when the map has none. Every caller already
+ * treats the plane as optional, so a dry map simply never gets a sea.
+ */
 export function createWaterPlane(
   scene: THREE.Scene,
   map: MapDef,
   settings: QualitySettings,
   sky?: SkySource,
-): WaterPlane {
+): WaterPlane | null {
+  if (!map.water) return null;
   const handle = createWaterMaterial(map, settings, sky);
   const geometry = buildPolarGrid();
   const mesh = new THREE.Mesh(geometry, handle.material);

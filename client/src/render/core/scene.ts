@@ -1,11 +1,11 @@
 /**
  * Scene construction and teardown.
  *
- * The scene owns three things the rest of the renderer builds on: the fog the
- * world fades into, the scaffold lighting every mesh registers against, and a
- * disposal walk. `lighting.ts` refines the scaffold (sun, shadows, biome
- * bounce); it reads the named lights off `scene.userData.lights` so it can tune
- * them without re-deriving the setup.
+ * The scene owns two things the rest of the renderer builds on: the fog the
+ * world fades into, and a disposal walk. Lighting is NOT set up here —
+ * `lighting.ts` owns every light in the scene and derives all of them from the
+ * map's time of day, so a second "scaffold" set would only double the key
+ * light and wash the ground out.
  *
  * Nothing is loaded: no HDR environment, no skybox texture — the sky dome
  * (sky module) paints the background, which is why `scene.background` stays
@@ -15,17 +15,19 @@ import * as THREE from "three";
 import type { MapDef } from "@shared/protocol";
 import type { QualitySettings } from "./quality";
 
-/** Key under which the scaffold lights are published for `lighting.ts`. */
-export const LIGHTS_KEY = "lights";
-
-export interface SceneLightScaffold {
-  /** Key light — placed by `lighting.ts` from the map's sun colour. */
-  sun: THREE.DirectionalLight;
-  /** Sky/ground bounce, re-tinted per biome by `lighting.ts`. */
-  hemisphere: THREE.HemisphereLight;
-  /** Flat floor so nothing is ever fully black before the bounce light lands. */
-  ambient: THREE.AmbientLight;
-}
+/**
+ * Converts a map's authored `fog_density` into the coefficient this client
+ * actually renders with.
+ *
+ * The authored numbers are FogExp2 coefficients written for a camera standing
+ * on the ground. The RTS camera is ~70 m up, so the *nearest* ground in frame
+ * is already 40–90 m away and the far field runs past 400 m; at the authored
+ * 0.012 the extinction is 50% at 58 m and 99.9% at 200 m, which fogs the whole
+ * playfield into a flat wash of fog colour and hides the horizon. Scaled by
+ * this factor grassland sits at half-fog around 210 m and is opaque by ~500 m,
+ * which is where the clipmap's cover radius puts its outer edge.
+ */
+export const FOG_DENSITY_SCALE = 0.28;
 
 /**
  * Fog colour for a map's time of day: warm and bright at the horizon near the
@@ -46,7 +48,7 @@ export function fogColorFor(map: MapDef): THREE.Color {
 }
 
 /**
- * Builds the scene for a map: exponential fog plus the light scaffold.
+ * Builds the scene for a map: exponential fog and nothing else.
  *
  * `scene.background` is deliberately null — the sky dome renders first and owns
  * the visible background, and a scene background would both fight it and block
@@ -56,24 +58,9 @@ export function createScene(map: MapDef, settings: QualitySettings): THREE.Scene
   const scene = new THREE.Scene();
   scene.background = null;
 
-  const fog = new THREE.FogExp2(fogColorFor(map).getHex(), Math.max(0, map.lighting?.fog_density ?? 0.012));
-  scene.fog = fog;
+  const density = Math.max(0, map.lighting?.fog_density ?? 0.012) * FOG_DENSITY_SCALE;
+  scene.fog = new THREE.FogExp2(fogColorFor(map).getHex(), density);
 
-  const sunColor = new THREE.Color(map.lighting?.sun_color ?? "#fff2d0");
-  const sun = new THREE.DirectionalLight(sunColor, settings.shadowMapSize > 0 ? 2.6 : 2.0);
-  sun.position.set(map.size * 0.5 + 80, 120, map.size * 0.5 - 40);
-  sun.target.position.set(map.size * 0.5, 0, map.size * 0.5);
-  scene.add(sun);
-  scene.add(sun.target);
-
-  const hemisphere = new THREE.HemisphereLight(0x9fc4ff, 0x4a3b2c, 0.85);
-  scene.add(hemisphere);
-
-  const ambient = new THREE.AmbientLight(0xffffff, 0.25);
-  scene.add(ambient);
-
-  const lights: SceneLightScaffold = { sun, hemisphere, ambient };
-  scene.userData[LIGHTS_KEY] = lights;
   scene.userData.mapId = map.id;
   scene.userData.settings = settings;
   return scene;

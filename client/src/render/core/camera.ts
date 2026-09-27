@@ -4,8 +4,8 @@
  * A fixed-pitch orbit rig: the camera always looks at a ground point from a
  * yaw-relative offset, zoom is the only free axis, and everything else (pan,
  * rotate, follow, shake) moves that single focus point. The result is a camera
- * that can never end up under the terrain or pointing at the sky, which is the
- * usual failure of a free-fly RTS camera.
+ * that can never end up under the terrain, and — because `PITCH` is chosen
+ * against the FOV — one whose frame always contains the horizon.
  *
  * Headless-safe: the constructor and `update()` never read `document`/`window`
  * unless a `domElement` was supplied, so a Vitest `environment: "node"` run can
@@ -15,15 +15,27 @@ import * as THREE from "three";
 import type { MapDef } from "@shared/protocol";
 import { heightField } from "../terrain/heightfield";
 
-/** Viewport height in metres covered on the ground at zoom 1. */
-const BASE_VIEW_HEIGHT = 96;
+/**
+ * Ground metres covered by the viewport's short axis at zoom 1. Paired with
+ * `PITCH` and the perspective camera's FOV: the rig's height above the ground
+ * is `BASE_VIEW_HEIGHT / (2·tan(fov/2))`, so this is also the knob that sets
+ * how far the camera stands off the focus point.
+ */
+const BASE_VIEW_HEIGHT = 78;
 
 /** Zoom clamp — 0.25 is a strategic overview, 1.6 is nose-on unit inspection. */
 export const MIN_ZOOM = 0.25;
 export const MAX_ZOOM = 1.6;
 
-/** Downward pitch of the rig; near-vertical would kill the sense of place. */
-const PITCH = THREE.MathUtils.degToRad(52);
+/**
+ * Downward pitch of the rig, in degrees. This is the one number that decides
+ * whether the player ever sees a horizon: the frame spans `±fov/2` around the
+ * view axis, so the top of the frame is `fov/2 − PITCH` above the horizontal.
+ * Anything at or above `fov/2` points the whole frustum into the ground and
+ * the sky dome is rendered but never on screen — which is exactly what a
+ * 52° pitch under a 50° FOV did. 24° leaves a ~10% sky band.
+ */
+const PITCH = THREE.MathUtils.degToRad(24);
 
 /** Follow smoothing time in seconds (critically damped, so no overshoot). */
 const FOLLOW_SMOOTH_TIME = 0.16;

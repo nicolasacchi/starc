@@ -16,7 +16,7 @@ import {
   setForcedQuality,
   settingsFor,
 } from "./quality";
-import { createScene, disposeScene } from "./scene";
+import { createScene, disposeScene, FOG_DENSITY_SCALE } from "./scene";
 import { GLSL_COLOR, GLSL_FBM, GLSL_HASH, GLSL_NOISE, injectShaderChunks } from "./shaderChunks";
 import { RtsCamera } from "./camera";
 import { GAME } from "@shared/gameData";
@@ -114,7 +114,9 @@ describe("scene", () => {
     const scene = createScene(map, settingsFor("high"));
     expect(scene.background).toBeNull();
     expect(scene.fog).toBeInstanceOf(THREE.FogExp2);
-    expect((scene.fog as THREE.FogExp2).density).toBeCloseTo(map.lighting.fog_density, 6);
+    // The client's own coefficient, not the map's authored one: the rig stands
+    // ~70 m up, so the authored density would fog the whole playfield out.
+    expect((scene.fog as THREE.FogExp2).density).toBeCloseTo(map.lighting.fog_density * FOG_DENSITY_SCALE, 9);
   });
 
   it("gives every map a distinct fog colour", () => {
@@ -308,8 +310,10 @@ describe("RtsCamera", () => {
     for (let i = 0; i < 300; i++) rts.update(1 / 60);
     cam.updateMatrixWorld(true);
 
+    // No DOM element, so the rig's viewport is 1x1: the centre of *that*
+    // viewport is the only screen point guaranteed to be on the look axis.
     const out = { x: 0, z: 0 };
-    const hit = rts.screenToGround(640, 360, out);
+    const hit = rts.screenToGround(0.5, 0.5, out);
     if (hit) {
       expect(out.x).toBeGreaterThanOrEqual(0);
       expect(out.x).toBeLessThanOrEqual(map.size);

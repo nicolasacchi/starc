@@ -34,14 +34,18 @@ import {
 } from "@render/terrain/terrainMaterial";
 
 /**
- * How far from the camera the terrain must still be drawn, in metres. Fog
- * (FogExp2, density 0.012–0.03 from the map data) is at 99% by 200 m, so
- * anything past this radius is invisible; the clipmap is sized to cover it.
+ * How far from the camera the terrain must still be drawn, in metres. The
+ * client renders fog at `map.fog_density × FOG_DENSITY_SCALE` (see
+ * core/scene.ts), which puts grassland at 95% extinction near 400 m, so the
+ * clipmap has to reach past that or the world ends in a visible edge.
  */
-const COVER_RADIUS = 200;
+const COVER_RADIUS = 480;
 
 /** Total clipmap cells across all levels; 160k cells ≈ 320k triangles. */
 const CELL_BUDGET = 160_000;
+
+/** Rings a preset may add on top of its own `terrainLodRings` for coverage. */
+const MAX_RINGS = 4;
 
 export interface ClipmapConfig {
   /** Finest cell size in metres. Matches the height field's own lattice. */
@@ -56,16 +60,30 @@ export interface ClipmapConfig {
 /**
  * Resolves a preset to a clipmap shape. Resolution comes from
  * `settings.terrainLodRings` (2, 3, 4, 5 on the four presets); the ring count
- * is then trimmed until the level fits `CELL_BUDGET`, and the resolution is
- * raised if trimming would leave the camera looking past the edge of the world.
+ * is then trimmed until the level fits `CELL_BUDGET`, added back while the
+ * budget allows to reach `COVER_RADIUS`, and only then is the centre block
+ * coarsened as a last resort.
+ *
+ * Order matters. A ring costs `3·cells²` cells and doubles the covered
+ * radius; a coarser `levelCells` doubles the radius too but throws away the
+ * metre-resolution centre that the height field's own lattice is built on. So
+ * rings first, and the fallback that coarsens the centre is only reached on a
+ * preset that cannot afford another ring at all.
  */
 export function resolveClipmap(settings: QualitySettings): ClipmapConfig {
   const rings = settings.terrainLodRings;
   let levelCells = rings >= 5 ? 144 : rings >= 4 ? 128 : rings >= 3 ? 96 : 64;
+  const cellsFor = (count: number): number => levelCells * levelCells * (1 + 3 * count);
   let ringCount = Math.min(3, Math.max(1, rings));
-  while (ringCount > 1 && levelCells * levelCells * (1 + 3 * ringCount) > CELL_BUDGET) ringCount--;
-  // Coverage wins over the triangle budget: this loop can only make the centre
-  // block finer, and it terminates because `levelCells * 2^ringCount` grows.
+  while (ringCount > 1 && cellsFor(ringCount) > CELL_BUDGET) ringCount--;
+  // Coverage next, cheapest way first: one more ring rather than a coarser
+  // centre block.
+  while (ringCount < MAX_RINGS && levelCells * Math.pow(2, ringCount) < COVER_RADIUS) {
+    if (cellsFor(ringCount + 1) > CELL_BUDGET) break;
+    ringCount++;
+  }
+  // Last resort, and the loop that always terminates: `levelCells * 2^ringCount`
+  // grows with every step.
   while (levelCells * Math.pow(2, ringCount) < COVER_RADIUS) levelCells += 2;
   return { cell0: 1, levelCells, ringCount, coverRadius: COVER_RADIUS };
 }

@@ -208,7 +208,11 @@ export class SceneManager {
     this.terrain = heightField(map);
     this.glReady = SceneManager.webglAvailable(canvas);
 
-    this.perspective = new THREE.PerspectiveCamera(50, 16 / 9, 0.5, 1400);
+    // 60° vertical: `RtsCamera.PITCH` is 24°, so the top of the frame sits 6°
+    // above the horizontal — a ~10% sky band. A narrower FOV would either
+    // bury the horizon again or force the pitch so steep the ground stops
+    // reading as ground. The far plane clears the 800 m sky dome.
+    this.perspective = new THREE.PerspectiveCamera(60, 16 / 9, 0.5, 1400);
     this.perspective.position.set(map.size / 2, 60, map.size / 2 + 60);
     this.camera = new RtsCamera(this.perspective, canvas, map);
     this.camera.focus(map.size / 2, map.size / 2, 0);
