@@ -1,0 +1,22 @@
+{
+  "name": "starc",
+  "private": true,
+  "version": "1.0.0",
+  "description": "STARC — a real-time strategy game. Rails + SQLite + ActionCable backend, three.js WebGL2 client.",
+  "type": "module",
+  "scripts": {
+    "data:build": "bun run scripts/build-game-data.ts",
+    "data:validate": "bun run scripts/validate-game-data.ts",
+    "dev:server": "cd server && bin/rails server -p 3000",
+    "dev:client": "cd client && bun run dev",
+    "test:client": "cd client && bun run test:run",
+    "test:server": "cd server && bundle exec rspec",
+    "typecheck": "cd client && bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.2",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,798 @@
+{
+  "race": "zerg",
+  "label": "Zerg",
+  "color": "#b8342b",
+  "units": [
+    {
+      "key": "drone",
+      "name": "Drone",
+      "kind": "unit",
+      "hotkey": "G",
+      "tier": 1,
+      "cost": {
+        "minerals": 50,
+        "vespene": 0,
+        "supply": 1
+      },
+      "build_time": 17,
+      "hp": 40,
+      "armor": 1,
+      "sight": 8,
+      "speed": 3.6,
+      "size": {
+        "radius": 0.5,
+        "height": 1.0
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 5,
+        "range": 0.6,
+        "cooldown": 0.86,
+        "weapon": "melee",
+        "projectile_speed": 0,
+        "targets": [
+          "ground",
+          "structure"
+        ]
+      },
+      "harvest": {
+        "capacity": 10,
+        "rate": 0.5,
+        "refund_pct": 0.5
+      },
+      "abilities": [],
+      "produces": []
+    },
+    {
+      "key": "zergling",
+      "name": "Zergling",
+      "kind": "unit",
+      "hotkey": "A",
+      "tier": 1,
+      "cost": {
+        "minerals": 50,
+        "vespene": 0,
+        "supply": 1
+      },
+      "build_time": 10,
+      "hp": 35,
+      "armor": 0,
+      "sight": 8,
+      "speed": 8.2,
+      "size": {
+        "radius": 0.4,
+        "height": 0.8
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 5,
+        "range": 0.6,
+        "cooldown": 0.6,
+        "weapon": "claw",
+        "projectile_speed": 0,
+        "targets": [
+          "ground",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "metabolic_boost",
+          "name": "Metabolic Boost",
+          "cooldown": 47,
+          "duration": 9.4,
+          "target": "self",
+          "effect": "speed_boost",
+          "magnitude": 1.6
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "spawning_pool"
+      ]
+    },
+    {
+      "key": "hydralisk",
+      "name": "Hydralisk",
+      "kind": "unit",
+      "hotkey": "Q",
+      "tier": 1,
+      "cost": {
+        "minerals": 100,
+        "vespene": 50,
+        "supply": 2
+      },
+      "build_time": 26,
+      "hp": 80,
+      "armor": 1,
+      "sight": 9,
+      "speed": 4.6,
+      "size": {
+        "radius": 0.7,
+        "height": 1.6
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 8,
+        "range": 5.0,
+        "cooldown": 0.8,
+        "weapon": "acid",
+        "projectile_speed": 50.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "burrow",
+          "name": "Burrow",
+          "cooldown": 1.0,
+          "target": "self",
+          "effect": "cloak",
+          "duration_s": 0.5
+        },
+        {
+          "key": "acid_spore_damage",
+          "name": "Acid Spore",
+          "cooldown": 0.8,
+          "target": "enemy_unit",
+          "effect": "damage",
+          "magnitude": 5
+        },
+        {
+          "key": "acid_spore_slow",
+          "name": "Acid Spore Slow",
+          "cooldown": 0.8,
+          "target": "enemy_unit",
+          "effect": "slow",
+          "magnitude": 0.5,
+          "duration_s": 1.5
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "hydralisk_den"
+      ]
+    },
+    {
+      "key": "ultralisk",
+      "name": "Ultralisk",
+      "kind": "unit",
+      "hotkey": "W",
+      "tier": 2,
+      "cost": {
+        "minerals": 300,
+        "vespene": 200,
+        "supply": 3
+      },
+      "build_time": 55,
+      "hp": 400,
+      "armor": 3,
+      "sight": 9,
+      "speed": 3.9,
+      "size": {
+        "radius": 1.4,
+        "height": 3.4
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 45,
+        "range": 1.2,
+        "cooldown": 1.42,
+        "weapon": "melee",
+        "projectile_speed": 0,
+        "targets": [
+          "ground",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "burrow",
+          "name": "Burrow",
+          "cooldown": 1.0,
+          "target": "self",
+          "effect": "cloak",
+          "duration_s": 0.5
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "hydralisk_den"
+      ]
+    },
+    {
+      "key": "queen",
+      "name": "Queen",
+      "kind": "unit",
+      "hotkey": "E",
+      "tier": 2,
+      "cost": {
+        "minerals": 150,
+        "vespene": 100,
+        "supply": 2
+      },
+      "build_time": 33,
+      "hp": 120,
+      "armor": 1,
+      "sight": 10,
+      "speed": 4.3,
+      "size": {
+        "radius": 0.8,
+        "height": 1.8
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 10,
+        "range": 5.0,
+        "cooldown": 0.7,
+        "weapon": "acid",
+        "projectile_speed": 50.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "ensnare",
+          "name": "Ensnare",
+          "cooldown": 8.0,
+          "target": "enemy_unit",
+          "effect": "slow",
+          "magnitude": 0.6,
+          "duration_s": 2.66
+        },
+        {
+          "key": "spawn_zergling",
+          "name": "Spawn Zergling",
+          "cooldown": 30.0,
+          "target": "point",
+          "effect": "spawn",
+          "spawn": "zergling",
+          "duration": 10
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "hatchery"
+      ]
+    },
+    {
+      "key": "roach",
+      "name": "Roach",
+      "kind": "unit",
+      "hotkey": "D",
+      "tier": 1,
+      "cost": {
+        "minerals": 75,
+        "vespene": 25,
+        "supply": 2
+      },
+      "build_time": 27,
+      "hp": 75,
+      "armor": 1,
+      "sight": 9,
+      "speed": 5.6,
+      "size": {
+        "radius": 0.6,
+        "height": 1.0
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 18,
+        "range": 4.5,
+        "cooldown": 1.1,
+        "weapon": "acid",
+        "projectile_speed": 40.0,
+        "targets": [
+          "ground",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "burrow",
+          "name": "Burrow",
+          "cooldown": 1.0,
+          "target": "self",
+          "effect": "cloak",
+          "duration_s": 0.5
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "roach_warren"
+      ]
+    },
+    {
+      "key": "lurker",
+      "name": "Lurker",
+      "kind": "unit",
+      "hotkey": "Z",
+      "tier": 3,
+      "cost": {
+        "minerals": 150,
+        "vespene": 150,
+        "supply": 2
+      },
+      "build_time": 43,
+      "hp": 125,
+      "armor": 1,
+      "sight": 11,
+      "speed": 4.3,
+      "size": {
+        "radius": 0.8,
+        "height": 1.4
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 45,
+        "range": 7.0,
+        "cooldown": 1.5,
+        "weapon": "acid",
+        "projectile_speed": 50.0,
+        "targets": [
+          "ground",
+          "structure"
+        ],
+        "splash": {
+          "radius": 1.2,
+          "damage_pct": 0.4
+        }
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "burrow",
+          "name": "Burrow",
+          "cooldown": 1.0,
+          "target": "self",
+          "effect": "cloak",
+          "duration_s": 0.5
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "lair"
+      ]
+    },
+    {
+      "key": "infestor",
+      "name": "Infestor",
+      "kind": "unit",
+      "hotkey": "X",
+      "tier": 3,
+      "cost": {
+        "minerals": 100,
+        "vespene": 150,
+        "supply": 2
+      },
+      "build_time": 36,
+      "hp": 100,
+      "armor": 2,
+      "sight": 9,
+      "speed": 2.5,
+      "size": {
+        "radius": 0.7,
+        "height": 1.4
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 0,
+        "range": 5.0,
+        "cooldown": 2.0,
+        "weapon": "acid",
+        "projectile_speed": 50.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "fungal_cloud_damage",
+          "name": "Fungal Cloud",
+          "cooldown": 7.0,
+          "target": "point",
+          "effect": "damage",
+          "magnitude": 8,
+          "radius": 2.5,
+          "duration": 2.66
+        },
+        {
+          "key": "fungal_cloud_slow",
+          "name": "Fungal Cloud Slow",
+          "cooldown": 7.0,
+          "target": "point",
+          "effect": "slow",
+          "magnitude": 0.4,
+          "radius": 2.5,
+          "duration_s": 2.66
+        },
+        {
+          "key": "neural_parasite",
+          "name": "Neural Parasite",
+          "cooldown": 50.0,
+          "target": "enemy_unit",
+          "effect": "spawn",
+          "duration": 1.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "lair"
+      ]
+    },
+    {
+      "key": "corruptor",
+      "name": "Corruptor",
+      "kind": "unit",
+      "hotkey": "F",
+      "tier": 2,
+      "cost": {
+        "minerals": 150,
+        "vespene": 100,
+        "supply": 2
+      },
+      "build_time": 37,
+      "hp": 150,
+      "armor": 2,
+      "sight": 11,
+      "speed": 5.8,
+      "size": {
+        "radius": 1.0,
+        "height": 2.0
+      },
+      "movement": "air",
+      "attack": {
+        "damage": 20,
+        "range": 6.0,
+        "cooldown": 0.86,
+        "weapon": "acid",
+        "projectile_speed": 50.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "produces": [],
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "mutate_guardian",
+          "name": "Mutate",
+          "cooldown": 0.0,
+          "target": "self",
+          "effect": "spawn",
+          "spawn": "guardian",
+          "duration": 22
+        }
+      ],
+      "required_buildings": [
+        "spire"
+      ]
+    },
+    {
+      "key": "guardian",
+      "name": "Guardian",
+      "kind": "unit",
+      "hotkey": "C",
+      "tier": 3,
+      "cost": {
+        "minerals": 50,
+        "vespene": 150,
+        "supply": 3
+      },
+      "build_time": 26,
+      "hp": 250,
+      "armor": 3,
+      "sight": 11,
+      "speed": 4.6,
+      "size": {
+        "radius": 1.5,
+        "height": 3.0
+      },
+      "movement": "air",
+      "attack": {
+        "damage": 30,
+        "range": 3.0,
+        "cooldown": 1.28,
+        "weapon": "cannon",
+        "projectile_speed": 50.0,
+        "targets": [
+          "ground",
+          "structure"
+        ],
+        "splash": {
+          "radius": 1.2,
+          "damage_pct": 0.35
+        }
+      },
+      "harvest": null,
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "spire"
+      ]
+    }
+  ],
+  "buildings": [
+    {
+      "key": "hatchery",
+      "name": "Hatchery",
+      "kind": "building",
+      "hotkey": "B",
+      "tier": 0,
+      "cost": {
+        "minerals": 300,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 10
+      },
+      "build_time": 71,
+      "hp": 1500,
+      "armor": 2,
+      "sight": 10,
+      "size": {
+        "radius": 3.0,
+        "height": 3.0
+      },
+      "abilities": [],
+      "produces": [
+        "drone",
+        "queen",
+        "overlord",
+        "lair",
+        "extractor",
+        "spawning_pool",
+        "hydralisk_den",
+        "roach_warren",
+        "spire"
+      ]
+    },
+    {
+      "key": "overlord",
+      "name": "Overlord",
+      "kind": "building",
+      "hotkey": "V",
+      "tier": 1,
+      "cost": {
+        "minerals": 100,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 8
+      },
+      "build_time": 22,
+      "hp": 200,
+      "armor": 1,
+      "sight": 9,
+      "size": {
+        "radius": 1.5,
+        "height": 2.0
+      },
+      "abilities": [],
+      "produces": [
+        "drone"
+      ],
+      "defense": null
+    },
+    {
+      "key": "extractor",
+      "name": "Extractor",
+      "kind": "building",
+      "hotkey": "N",
+      "tier": 1,
+      "cost": {
+        "minerals": 25,
+        "vespene": 0,
+        "supply": 0
+      },
+      "build_time": 30,
+      "hp": 900,
+      "armor": 2,
+      "sight": 9,
+      "size": {
+        "radius": 1.5,
+        "height": 1.6
+      },
+      "abilities": [],
+      "produces": [],
+      "defense": null
+    },
+    {
+      "key": "spawning_pool",
+      "name": "Spawning Pool",
+      "kind": "building",
+      "hotkey": "M",
+      "tier": 1,
+      "cost": {
+        "minerals": 200,
+        "vespene": 0,
+        "supply": 0
+      },
+      "build_time": 40,
+      "hp": 1100,
+      "armor": 2,
+      "sight": 9,
+      "size": {
+        "radius": 2.0,
+        "height": 1.6
+      },
+      "abilities": [],
+      "produces": [
+        "zergling"
+      ],
+      "required_buildings": [
+        "hatchery"
+      ],
+      "defense": null
+    },
+    {
+      "key": "hydralisk_den",
+      "name": "Hydralisk Den",
+      "kind": "building",
+      "hotkey": "P",
+      "tier": 1,
+      "cost": {
+        "minerals": 100,
+        "vespene": 100,
+        "supply": 0
+      },
+      "build_time": 39,
+      "hp": 1100,
+      "armor": 2,
+      "sight": 9,
+      "size": {
+        "radius": 2.0,
+        "height": 1.8
+      },
+      "abilities": [],
+      "produces": [
+        "hydralisk",
+        "ultralisk"
+      ],
+      "required_buildings": [
+        "hatchery"
+      ],
+      "defense": null
+    },
+    {
+      "key": "roach_warren",
+      "name": "Roach Warren",
+      "kind": "building",
+      "hotkey": "O",
+      "tier": 1,
+      "cost": {
+        "minerals": 150,
+        "vespene": 75,
+        "supply": 0
+      },
+      "build_time": 45,
+      "hp": 1200,
+      "armor": 2,
+      "sight": 9,
+      "size": {
+        "radius": 2.0,
+        "height": 1.8
+      },
+      "abilities": [],
+      "produces": [
+        "roach"
+      ],
+      "required_buildings": [
+        "hatchery"
+      ],
+      "defense": null
+    },
+    {
+      "key": "spire",
+      "name": "Spire",
+      "kind": "building",
+      "hotkey": "U",
+      "tier": 2,
+      "cost": {
+        "minerals": 200,
+        "vespene": 200,
+        "supply": 0
+      },
+      "build_time": 70,
+      "hp": 1000,
+      "armor": 2,
+      "sight": 10,
+      "size": {
+        "radius": 2.0,
+        "height": 3.0
+      },
+      "abilities": [],
+      "produces": [
+        "corruptor",
+        "guardian"
+      ],
+      "required_buildings": [
+        "hatchery"
+      ],
+      "defense": null
+    },
+    {
+      "key": "lair",
+      "name": "Lair",
+      "kind": "building",
+      "hotkey": "I",
+      "tier": 1,
+      "cost": {
+        "minerals": 150,
+        "vespene": 100,
+        "supply": 0,
+        "supply_provided": 10
+      },
+      "build_time": 50,
+      "hp": 1500,
+      "armor": 3,
+      "sight": 10,
+      "size": {
+        "radius": 3.0,
+        "height": 3.4
+      },
+      "abilities": [],
+      "produces": [
+        "drone",
+        "queen",
+        "overlord",
+        "infestor",
+        "lurker"
+      ],
+      "required_buildings": [
+        "hatchery"
+      ],
+      "defense": null
+    },
+    {
+      "key": "spine_crawler",
+      "name": "Spine Crawler",
+      "kind": "building",
+      "hotkey": "K",
+      "tier": 2,
+      "cost": {
+        "minerals": 100,
+        "vespene": 0,
+        "supply": 0
+      },
+      "build_time": 50,
+      "hp": 800,
+      "armor": 3,
+      "sight": 10,
+      "size": {
+        "radius": 1.2,
+        "height": 1.4
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "hatchery"
+      ],
+      "defense": {
+        "range": 6.0,
+        "cooldown": 0.5,
+        "damage": 12,
+        "weapon": "cannon",
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      }
+    }
+  ]
+}

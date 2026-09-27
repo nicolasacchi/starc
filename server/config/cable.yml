@@ -1,0 +1,17 @@
+# ActionCable pub/sub adapter.
+#
+# development / test : the in-process async adapter, so the repo runs with no
+#                      external service.
+# production         : Redis. Scaling the app out is a config flip — point
+#                      REDIS_URL at a server and every process sees the same
+#                      `lobby` and `game:<id>` streams.
+development:
+  adapter: async
+
+test:
+  adapter: async
+
+production:
+  adapter: redis
+  url: <%= ENV["REDIS_URL"] %>
+  channel_prefix: starc_production

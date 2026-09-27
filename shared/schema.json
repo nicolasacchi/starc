@@ -1,0 +1,507 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "STARC race data",
+  "type": "object",
+  "required": [
+    "race",
+    "label",
+    "color",
+    "units",
+    "buildings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "race": {
+      "enum": [
+        "terran",
+        "zerg",
+        "protoss"
+      ]
+    },
+    "label": {
+      "type": "string"
+    },
+    "color": {
+      "type": "string",
+      "description": "hex #rrggbb primary race colour for HUD, lights, minimap"
+    },
+    "units": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/unit"
+      }
+    },
+    "buildings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/building"
+      }
+    }
+  },
+  "definitions": {
+    "resourceCost": {
+      "type": "object",
+      "required": [
+        "minerals",
+        "vespene",
+        "supply"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "minerals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "vespene": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "supply": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "supply_provided": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "attack": {
+      "type": "object",
+      "required": [
+        "damage",
+        "range",
+        "cooldown",
+        "weapon",
+        "projectile_speed",
+        "targets"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "damage": {
+          "type": "number",
+          "minimum": 0
+        },
+        "range": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "cooldown": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "weapon": {
+          "enum": [
+            "bullet",
+            "cannon",
+            "missile",
+            "beam",
+            "plasma",
+            "melee",
+            "acid",
+            "claw",
+            "none"
+          ]
+        },
+        "projectile_speed": {
+          "type": "number",
+          "minimum": 0
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "ground",
+              "air",
+              "structure"
+            ]
+          }
+        },
+        "splash": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "radius",
+            "damage_pct"
+          ],
+          "properties": {
+            "radius": {
+              "type": "number",
+              "minimum": 0
+            },
+            "damage_pct": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    },
+    "unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "name",
+        "kind",
+        "cost",
+        "build_time",
+        "hp",
+        "armor",
+        "sight",
+        "speed",
+        "size",
+        "attack",
+        "abilities",
+        "produces",
+        "movement"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "unit"
+        },
+        "hotkey": {
+          "type": "string",
+          "maxLength": 1
+        },
+        "tier": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost": {
+          "$ref": "#/definitions/resourceCost"
+        },
+        "build_time": {
+          "type": "number",
+          "minimum": 0
+        },
+        "hp": {
+          "type": "number",
+          "minimum": 1
+        },
+        "armor": {
+          "type": "number"
+        },
+        "shield": {
+          "type": "number",
+          "minimum": 0
+        },
+        "shield_regen": {
+          "type": "number",
+          "minimum": 0
+        },
+        "sight": {
+          "type": "number",
+          "minimum": 1
+        },
+        "speed": {
+          "type": "number",
+          "minimum": 0
+        },
+        "size": {
+          "type": "object",
+          "required": [
+            "radius",
+            "height"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "radius": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "height": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        },
+        "attack": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/attack"
+            },
+            {
+              "type": "object",
+              "required": [
+                "weapon"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "weapon": {
+                  "const": "none"
+                }
+              }
+            }
+          ]
+        },
+        "harvest": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "capacity",
+            "rate",
+            "refund_pct"
+          ],
+          "properties": {
+            "capacity": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "rate": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "refund_pct": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "abilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "name",
+              "cooldown",
+              "effect"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "name": {
+                "type": "string"
+              },
+              "cooldown": {
+                "type": "number",
+                "minimum": 0
+              },
+              "duration": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cost": {
+                "type": "number",
+                "minimum": 0
+              },
+              "target": {
+                "enum": [
+                  "self",
+                  "ally_unit",
+                  "enemy_unit",
+                  "point"
+                ]
+              },
+              "effect": {
+                "enum": [
+                  "damage",
+                  "heal",
+                  "shield",
+                  "speed_boost",
+                  "attack_boost",
+                  "armor_boost",
+                  "cloak",
+                  "blink",
+                  "web",
+                  "slow",
+                  "reveal",
+                  "spawn"
+                ]
+              },
+              "magnitude": {
+                "type": "number"
+              },
+              "radius": {
+                "type": "number"
+              },
+              "duration_s": {
+                "type": "number",
+                "minimum": 0
+              },
+              "spawn": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "produces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_buildings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "vision": {
+          "type": "number",
+          "minimum": 0
+        },
+        "movement": {
+          "enum": [
+            "ground",
+            "air"
+          ]
+        }
+      }
+    },
+    "building": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "name",
+        "kind",
+        "cost",
+        "build_time",
+        "hp",
+        "armor",
+        "sight",
+        "size",
+        "abilities",
+        "produces"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "building"
+        },
+        "hotkey": {
+          "type": "string",
+          "maxLength": 1
+        },
+        "tier": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost": {
+          "$ref": "#/definitions/resourceCost"
+        },
+        "build_time": {
+          "type": "number",
+          "minimum": 0
+        },
+        "hp": {
+          "type": "number",
+          "minimum": 1
+        },
+        "armor": {
+          "type": "number"
+        },
+        "sight": {
+          "type": "number",
+          "minimum": 1
+        },
+        "size": {
+          "type": "object",
+          "required": [
+            "radius",
+            "height"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "radius": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "height": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        },
+        "abilities": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "produces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_buildings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "vision": {
+          "type": "number",
+          "minimum": 0
+        },
+        "defense": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "range",
+            "cooldown",
+            "damage",
+            "targets"
+          ],
+          "properties": {
+            "range": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "cooldown": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "damage": {
+              "type": "number",
+              "minimum": 0
+            },
+            "weapon": {
+              "type": "string"
+            },
+            "targets": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "missile_splash": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  }
+}

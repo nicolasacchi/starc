@@ -1,0 +1,861 @@
+{
+  "race": "protoss",
+  "label": "Protoss",
+  "color": "#f5e05a",
+  "units": [
+    {
+      "key": "probe",
+      "name": "Probe",
+      "kind": "unit",
+      "hotkey": "G",
+      "tier": 1,
+      "cost": {
+        "minerals": 50,
+        "vespene": 0,
+        "supply": 1
+      },
+      "build_time": 17,
+      "hp": 40,
+      "armor": 0,
+      "shield": 20,
+      "shield_regen": 1.0,
+      "sight": 9,
+      "speed": 3.6,
+      "size": {
+        "radius": 0.5,
+        "height": 1.6
+      },
+      "movement": "ground",
+      "attack": {
+        "weapon": "none"
+      },
+      "harvest": {
+        "capacity": 10,
+        "rate": 0.5,
+        "refund_pct": 0.5
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "nexus"
+      ]
+    },
+    {
+      "key": "zealot",
+      "name": "Zealot",
+      "kind": "unit",
+      "hotkey": "A",
+      "tier": 2,
+      "cost": {
+        "minerals": 100,
+        "vespene": 0,
+        "supply": 2
+      },
+      "build_time": 38,
+      "hp": 100,
+      "armor": 1,
+      "shield": 40,
+      "shield_regen": 1.5,
+      "sight": 9,
+      "speed": 4.0,
+      "size": {
+        "radius": 0.5,
+        "height": 2.0
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 16,
+        "range": 0.8,
+        "cooldown": 0.86,
+        "weapon": "melee",
+        "projectile_speed": 0,
+        "targets": [
+          "ground",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "charge",
+          "name": "Charge",
+          "cooldown": 7.0,
+          "duration": 1.0,
+          "cost": 0,
+          "target": "point",
+          "effect": "speed_boost",
+          "magnitude": 2.5,
+          "duration_s": 1.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "gateway"
+      ]
+    },
+    {
+      "key": "stalker",
+      "name": "Stalker",
+      "kind": "unit",
+      "hotkey": "Q",
+      "tier": 2,
+      "cost": {
+        "minerals": 125,
+        "vespene": 50,
+        "supply": 2
+      },
+      "build_time": 42,
+      "hp": 120,
+      "armor": 1,
+      "shield": 40,
+      "shield_regen": 1.5,
+      "sight": 10,
+      "speed": 3.5,
+      "size": {
+        "radius": 0.5,
+        "height": 2.1
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 13,
+        "range": 6.0,
+        "cooldown": 0.6,
+        "weapon": "bullet",
+        "projectile_speed": 60.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "blink",
+          "name": "Blink",
+          "cooldown": 20.0,
+          "cost": 0,
+          "target": "point",
+          "effect": "blink",
+          "magnitude": 9.0
+        },
+        {
+          "key": "phase_shift",
+          "name": "Phase Shift",
+          "cooldown": 25.0,
+          "duration": 4.0,
+          "cost": 0,
+          "target": "self",
+          "effect": "cloak",
+          "duration_s": 4.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "gateway"
+      ]
+    },
+    {
+      "key": "sentry",
+      "name": "Sentry",
+      "kind": "unit",
+      "hotkey": "W",
+      "tier": 1,
+      "cost": {
+        "minerals": 50,
+        "vespene": 100,
+        "supply": 2
+      },
+      "build_time": 37,
+      "hp": 60,
+      "armor": 1,
+      "shield": 40,
+      "shield_regen": 1.5,
+      "sight": 9,
+      "speed": 3.5,
+      "size": {
+        "radius": 0.6,
+        "height": 2.0
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 8,
+        "range": 5.0,
+        "cooldown": 1.0,
+        "weapon": "bullet",
+        "projectile_speed": 45.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "force_field",
+          "name": "Force Field",
+          "cooldown": 30.0,
+          "duration": 10.0,
+          "cost": 50,
+          "target": "point",
+          "effect": "slow",
+          "magnitude": 0.5,
+          "radius": 3.0,
+          "duration_s": 10.0
+        },
+        {
+          "key": "photon_overcharge",
+          "name": "Photon Overcharge",
+          "cooldown": 40.0,
+          "duration": 12.0,
+          "cost": 0,
+          "target": "ally_unit",
+          "effect": "shield",
+          "magnitude": 30.0,
+          "duration_s": 12.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "gateway"
+      ]
+    },
+    {
+      "key": "high_templar",
+      "name": "High Templar",
+      "kind": "unit",
+      "hotkey": "E",
+      "tier": 2,
+      "cost": {
+        "minerals": 50,
+        "vespene": 150,
+        "supply": 2
+      },
+      "build_time": 40,
+      "hp": 50,
+      "armor": 0,
+      "shield": 50,
+      "shield_regen": 2.0,
+      "sight": 9,
+      "speed": 3.4,
+      "size": {
+        "radius": 0.5,
+        "height": 2.2
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 4,
+        "range": 4.0,
+        "cooldown": 0.83,
+        "weapon": "plasma",
+        "projectile_speed": 50.0,
+        "targets": [
+          "ground",
+          "structure"
+        ],
+        "splash": {
+          "radius": 0.5,
+          "damage_pct": 0.5
+        }
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "storm",
+          "name": "Psionic Storm",
+          "cooldown": 90.0,
+          "duration": 5.0,
+          "cost": 0,
+          "target": "point",
+          "effect": "damage",
+          "magnitude": 6.0,
+          "radius": 3.0,
+          "duration_s": 5.0
+        },
+        {
+          "key": "psionic_union",
+          "name": "Psionic Union",
+          "cooldown": 30.0,
+          "cost": 0,
+          "target": "ally_unit",
+          "effect": "heal",
+          "magnitude": 25.0
+        },
+        {
+          "key": "archon_merge",
+          "name": "Archon Merge",
+          "cooldown": 90.0,
+          "duration": 3.0,
+          "cost": 0,
+          "target": "ally_unit",
+          "effect": "spawn",
+          "spawn": "archon"
+        }
+      ],
+      "produces": [
+        "archon"
+      ],
+      "required_buildings": [
+        "gateway"
+      ]
+    },
+    {
+      "key": "dark_templar",
+      "name": "Dark Templar",
+      "kind": "unit",
+      "hotkey": "D",
+      "tier": 2,
+      "cost": {
+        "minerals": 125,
+        "vespene": 125,
+        "supply": 2
+      },
+      "build_time": 39,
+      "hp": 60,
+      "armor": 1,
+      "shield": 40,
+      "shield_regen": 1.5,
+      "sight": 9,
+      "speed": 3.4,
+      "size": {
+        "radius": 0.5,
+        "height": 2.1
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 20,
+        "range": 1.0,
+        "cooldown": 0.83,
+        "weapon": "melee",
+        "projectile_speed": 0,
+        "targets": [
+          "ground",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "blink",
+          "name": "Blink",
+          "cooldown": 20.0,
+          "cost": 0,
+          "target": "point",
+          "effect": "blink",
+          "magnitude": 9.0
+        },
+        {
+          "key": "meld",
+          "name": "Meld",
+          "cooldown": 45.0,
+          "duration": 8.0,
+          "cost": 0,
+          "target": "ally_unit",
+          "effect": "cloak",
+          "duration_s": 8.0
+        },
+        {
+          "key": "psi_blade",
+          "name": "Psi Blade",
+          "cooldown": 15.0,
+          "duration": 8.0,
+          "cost": 0,
+          "target": "self",
+          "effect": "attack_boost",
+          "magnitude": 10.0,
+          "duration_s": 8.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "twilight_council"
+      ]
+    },
+    {
+      "key": "adept",
+      "name": "Adept",
+      "kind": "unit",
+      "hotkey": "Z",
+      "tier": 2,
+      "cost": {
+        "minerals": 100,
+        "vespene": 25,
+        "supply": 2
+      },
+      "build_time": 38,
+      "hp": 60,
+      "armor": 0,
+      "shield": 40,
+      "shield_regen": 1.5,
+      "sight": 9,
+      "speed": 3.75,
+      "size": {
+        "radius": 0.5,
+        "height": 2.0
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 9,
+        "range": 4.5,
+        "cooldown": 0.77,
+        "weapon": "plasma",
+        "projectile_speed": 60.0,
+        "targets": [
+          "ground",
+          "structure"
+        ],
+        "splash": {
+          "radius": 0.5,
+          "damage_pct": 0.5
+        }
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "psionic_transfer",
+          "name": "Psionic Transfer",
+          "cooldown": 20.0,
+          "duration": 5.0,
+          "cost": 0,
+          "target": "ally_unit",
+          "effect": "shield",
+          "magnitude": 25.0,
+          "duration_s": 5.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "gateway"
+      ]
+    },
+    {
+      "key": "archon",
+      "name": "Archon",
+      "kind": "unit",
+      "hotkey": "X",
+      "tier": 3,
+      "cost": {
+        "minerals": 0,
+        "vespene": 0,
+        "supply": 3
+      },
+      "build_time": 5,
+      "hp": 300,
+      "armor": 3,
+      "shield": 200,
+      "shield_regen": 3.0,
+      "sight": 10,
+      "speed": 2.5,
+      "size": {
+        "radius": 1.0,
+        "height": 3.5
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 45,
+        "range": 1.2,
+        "cooldown": 2.34,
+        "weapon": "melee",
+        "projectile_speed": 0,
+        "targets": [
+          "ground",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "shield_aura",
+          "name": "Shield Battery Aura",
+          "cooldown": 1.0,
+          "duration": 2.0,
+          "cost": 0,
+          "target": "self",
+          "effect": "shield",
+          "magnitude": 10.0,
+          "radius": 5.0,
+          "duration_s": 2.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "twilight_council"
+      ]
+    },
+    {
+      "key": "carrier",
+      "name": "Carrier",
+      "kind": "unit",
+      "hotkey": "F",
+      "tier": 3,
+      "cost": {
+        "minerals": 350,
+        "vespene": 250,
+        "supply": 3
+      },
+      "build_time": 120,
+      "hp": 500,
+      "armor": 4,
+      "shield": 300,
+      "shield_regen": 2.0,
+      "sight": 12,
+      "speed": 2.0,
+      "size": {
+        "radius": 2.5,
+        "height": 4.0
+      },
+      "movement": "air",
+      "attack": {
+        "damage": 8,
+        "range": 8.0,
+        "cooldown": 0.34,
+        "weapon": "missile",
+        "projectile_speed": 40.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ],
+        "splash": {
+          "radius": 1.2,
+          "damage_pct": 0.5
+        }
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "air_wing",
+          "name": "Air Wing",
+          "cooldown": 60.0,
+          "duration": 12.0,
+          "cost": 0,
+          "target": "self",
+          "effect": "attack_boost",
+          "magnitude": 12.0,
+          "duration_s": 12.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "robotics_facility"
+      ]
+    },
+    {
+      "key": "phoenix",
+      "name": "Phoenix",
+      "kind": "unit",
+      "hotkey": "C",
+      "tier": 3,
+      "cost": {
+        "minerals": 150,
+        "vespene": 100,
+        "supply": 2
+      },
+      "build_time": 35,
+      "hp": 200,
+      "armor": 2,
+      "shield": 150,
+      "shield_regen": 2.5,
+      "sight": 10,
+      "speed": 5.0,
+      "size": {
+        "radius": 0.75,
+        "height": 2.5
+      },
+      "movement": "air",
+      "attack": {
+        "damage": 9,
+        "range": 6.0,
+        "cooldown": 0.23,
+        "weapon": "plasma",
+        "projectile_speed": 60.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "air_weapon",
+          "name": "Air Weapon",
+          "cooldown": 0.0,
+          "duration": 0.0,
+          "cost": 0,
+          "target": "self",
+          "effect": "attack_boost",
+          "magnitude": 4.0
+        },
+        {
+          "key": "terminate",
+          "name": "Terminate",
+          "cooldown": 30.0,
+          "duration": 0.0,
+          "cost": 0,
+          "target": "enemy_unit",
+          "effect": "damage",
+          "magnitude": 120.0,
+          "radius": 1.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "gateway"
+      ]
+    }
+  ],
+  "buildings": [
+    {
+      "key": "nexus",
+      "name": "Nexus",
+      "kind": "building",
+      "hotkey": "B",
+      "tier": 1,
+      "cost": {
+        "minerals": 400,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 10
+      },
+      "build_time": 71,
+      "hp": 1000,
+      "armor": 3,
+      "sight": 10,
+      "size": {
+        "radius": 2.5,
+        "height": 3.0
+      },
+      "abilities": [],
+      "produces": [
+        "probe"
+      ],
+      "required_buildings": []
+    },
+    {
+      "key": "pylon",
+      "name": "Pylon",
+      "kind": "building",
+      "hotkey": "V",
+      "tier": 1,
+      "cost": {
+        "minerals": 100,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 8
+      },
+      "build_time": 25,
+      "hp": 100,
+      "armor": 0,
+      "sight": 8,
+      "size": {
+        "radius": 0.75,
+        "height": 2.5
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": []
+    },
+    {
+      "key": "assimilator",
+      "name": "Assimilator",
+      "kind": "building",
+      "hotkey": "N",
+      "tier": 1,
+      "cost": {
+        "minerals": 75,
+        "vespene": 0,
+        "supply": 0
+      },
+      "build_time": 30,
+      "hp": 300,
+      "armor": 2,
+      "sight": 8,
+      "size": {
+        "radius": 1.25,
+        "height": 2.5
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "nexus"
+      ]
+    },
+    {
+      "key": "gateway",
+      "name": "Gateway",
+      "kind": "building",
+      "hotkey": "M",
+      "tier": 1,
+      "cost": {
+        "minerals": 150,
+        "vespene": 0,
+        "supply": 0
+      },
+      "build_time": 46,
+      "hp": 500,
+      "armor": 2,
+      "sight": 9,
+      "size": {
+        "radius": 1.5,
+        "height": 2.5
+      },
+      "abilities": [],
+      "produces": [
+        "zealot",
+        "stalker",
+        "sentry",
+        "high_templar",
+        "adept",
+        "phoenix"
+      ],
+      "required_buildings": [
+        "nexus"
+      ]
+    },
+    {
+      "key": "forge",
+      "name": "Forge",
+      "kind": "building",
+      "hotkey": "P",
+      "tier": 2,
+      "cost": {
+        "minerals": 150,
+        "vespene": 0,
+        "supply": 0
+      },
+      "build_time": 34,
+      "hp": 400,
+      "armor": 2,
+      "sight": 8,
+      "size": {
+        "radius": 1.5,
+        "height": 2.0
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "nexus"
+      ]
+    },
+    {
+      "key": "photon_cannon",
+      "name": "Photon Cannon",
+      "kind": "building",
+      "hotkey": "O",
+      "tier": 2,
+      "cost": {
+        "minerals": 150,
+        "vespene": 0,
+        "supply": 0
+      },
+      "build_time": 35,
+      "hp": 500,
+      "armor": 2,
+      "sight": 11,
+      "size": {
+        "radius": 0.75,
+        "height": 4.0
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "forge"
+      ],
+      "defense": {
+        "range": 9.0,
+        "cooldown": 1.0,
+        "damage": 22,
+        "weapon": "beam",
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      }
+    },
+    {
+      "key": "cybernetics_core",
+      "name": "Cybernetics Core",
+      "kind": "building",
+      "hotkey": "U",
+      "tier": 2,
+      "cost": {
+        "minerals": 150,
+        "vespene": 0,
+        "supply": 0
+      },
+      "build_time": 43,
+      "hp": 500,
+      "armor": 2,
+      "sight": 8,
+      "size": {
+        "radius": 1.5,
+        "height": 2.0
+      },
+      "abilities": [],
+      "produces": [
+        "sentry"
+      ],
+      "required_buildings": [
+        "gateway"
+      ]
+    },
+    {
+      "key": "twilight_council",
+      "name": "Twilight Council",
+      "kind": "building",
+      "hotkey": "I",
+      "tier": 2,
+      "cost": {
+        "minerals": 150,
+        "vespene": 100,
+        "supply": 0
+      },
+      "build_time": 50,
+      "hp": 600,
+      "armor": 2,
+      "sight": 9,
+      "size": {
+        "radius": 1.5,
+        "height": 2.0
+      },
+      "abilities": [],
+      "produces": [
+        "dark_templar",
+        "archon"
+      ],
+      "required_buildings": [
+        "gateway"
+      ]
+    },
+    {
+      "key": "robotics_facility",
+      "name": "Robotics Facility",
+      "kind": "building",
+      "hotkey": "K",
+      "tier": 3,
+      "cost": {
+        "minerals": 200,
+        "vespene": 100,
+        "supply": 0
+      },
+      "build_time": 55,
+      "hp": 500,
+      "armor": 2,
+      "sight": 9,
+      "size": {
+        "radius": 1.5,
+        "height": 2.0
+      },
+      "abilities": [],
+      "produces": [
+        "carrier"
+      ],
+      "required_buildings": [
+        "gateway"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+{
+  "maps": [
+    {
+      "id": "altaior",
+      "name": "Altaior",
+      "size": 256,
+      "max_players": 8,
+      "terrain_seed": 1337,
+      "water": false,
+      "elevation": 0.55,
+      "biome": "grassland",
+      "description": "Rolling green hills. Open lanes, few chokepoints. The neutral map.",
+      "start_positions": [
+        { "x": 32, "y": 32 }, { "x": 224, "y": 32 },
+        { "x": 32, "y": 224 }, { "x": 224, "y": 224 },
+        { "x": 128, "y": 32 }, { "x": 128, "y": 224 },
+        { "x": 32, "y": 128 }, { "x": 224, "y": 128 }
+      ],
+      "mineral_clusters": [
+        { "x": 44, "y": 44, "rich": true, "count": 8 },
+        { "x": 212, "y": 44, "rich": true, "count": 8 },
+        { "x": 44, "y": 212, "rich": true, "count": 8 },
+        { "x": 212, "y": 212, "rich": true, "count": 8 },
+        { "x": 140, "y": 44, "count": 6 }, { "x": 116, "y": 212, "count": 6 },
+        { "x": 44, "y": 140, "count": 6 }, { "x": 212, "y": 140, "count": 6 },
+        { "x": 128, "y": 128, "count": 12 },
+        { "x": 96, "y": 96, "count": 5 }, { "x": 160, "y": 160, "count": 5 },
+        { "x": 160, "y": 96, "count": 5 }, { "x": 96, "y": 160, "count": 5 }
+      ],
+      "expansion_candidates": [
+        { "x": 96, "y": 64 }, { "x": 160, "y": 64 },
+        { "x": 96, "y": 192 }, { "x": 160, "y": 192 },
+        { "x": 64, "y": 96 }, { "x": 192, "y": 96 },
+        { "x": 64, "y": 160 }, { "x": 192, "y": 160 }
+      ],
+      "lighting": { "time_of_day": 0.35, "sun_color": "#fff2d0", "fog_density": 0.012 }
+    },
+    {
+      "id": "chokepoint",
+      "name": "Chokepoint",
+      "size": 192,
+      "max_players": 4,
+      "terrain_seed": 4242,
+      "water": false,
+      "elevation": 0.95,
+      "biome": "rocky",
+      "description": "A ring of impassable rock with four gates. Two bases die to a single push.",
+      "start_positions": [
+        { "x": 28, "y": 96 }, { "x": 164, "y": 96 },
+        { "x": 96, "y": 28 }, { "x": 96, "y": 164 }
+      ],
+      "mineral_clusters": [
+        { "x": 40, "y": 96, "rich": true, "count": 8 },
+        { "x": 152, "y": 96, "rich": true, "count": 8 },
+        { "x": 96, "y": 40, "rich": true, "count": 8 },
+        { "x": 96, "y": 152, "rich": true, "count": 8 },
+        { "x": 96, "y": 96, "count": 10 },
+        { "x": 64, "y": 64, "count": 5 }, { "x": 128, "y": 64, "count": 5 },
+        { "x": 64, "y": 128, "count": 5 }, { "x": 128, "y": 128, "count": 5 }
+      ],
+      "expansion_candidates": [
+        { "x": 60, "y": 96 }, { "x": 132, "y": 96 },
+        { "x": 96, "y": 60 }, { "x": 96, "y": 132 }
+      ],
+      "lighting": { "time_of_day": 0.75, "sun_color": "#ffb870", "fog_density": 0.02 }
+    },
+    {
+      "id": "cataclysm",
+      "name": "Cataclysm",
+      "size": 256,
+      "max_players": 4,
+      "terrain_seed": 90210,
+      "water": true,
+      "elevation": 1.2,
+      "biome": "badlands",
+      "description": "Lava rivers split the map into three continents. Bridges fall.",
+      "start_positions": [
+        { "x": 34, "y": 128 }, { "x": 222, "y": 128 },
+        { "x": 128, "y": 34 }, { "x": 128, "y": 222 }
+      ],
+      "mineral_clusters": [
+        { "x": 46, "y": 128, "rich": true, "count": 8 },
+        { "x": 210, "y": 128, "rich": true, "count": 8 },
+        { "x": 128, "y": 46, "rich": true, "count": 8 },
+        { "x": 128, "y": 210, "rich": true, "count": 8 },
+        { "x": 128, "y": 128, "count": 8 },
+        { "x": 80, "y": 80, "count": 5 }, { "x": 176, "y": 80, "count": 5 },
+        { "x": 80, "y": 176, "count": 5 }, { "x": 176, "y": 176, "count": 5 }
+      ],
+      "expansion_candidates": [
+        { "x": 96, "y": 128 }, { "x": 160, "y": 128 },
+        { "x": 128, "y": 96 }, { "x": 128, "y": 160 }
+      ],
+      "lighting": { "time_of_day": 0.05, "sun_color": "#ff8860", "fog_density": 0.03 }
+    },
+    {
+      "id": "shattered_isle",
+      "name": "Shattered Isle",
+      "size": 224,
+      "max_players": 6,
+      "terrain_seed": 777,
+      "water": true,
+      "elevation": 0.8,
+      "biome": "island",
+      "description": "Scattered islands joined by shallow water. Slow, wide, and brutal.",
+      "start_positions": [
+        { "x": 36, "y": 36 }, { "x": 188, "y": 36 }, { "x": 112, "y": 24 },
+        { "x": 36, "y": 188 }, { "x": 188, "y": 188 }, { "x": 112, "y": 200 }
+      ],
+      "mineral_clusters": [
+        { "x": 48, "y": 48, "rich": true, "count": 8 },
+        { "x": 176, "y": 48, "rich": true, "count": 8 },
+        { "x": 112, "y": 36, "rich": true, "count": 8 },
+        { "x": 48, "y": 176, "rich": true, "count": 8 },
+        { "x": 176, "y": 176, "rich": true, "count": 8 },
+        { "x": 112, "y": 188, "rich": true, "count": 8 },
+        { "x": 112, "y": 112, "count": 10 },
+        { "x": 80, "y": 80, "count": 4 }, { "x": 144, "y": 144, "count": 4 }
+      ],
+      "expansion_candidates": [
+        { "x": 112, "y": 80 }, { "x": 112, "y": 144 },
+        { "x": 80, "y": 112 }, { "x": 144, "y": 112 }
+      ],
+      "lighting": { "time_of_day": 0.55, "sun_color": "#cfe8ff", "fog_density": 0.025 }
+    }
+  ]
+}

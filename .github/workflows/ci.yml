@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  data:
+    name: Game data validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Validate and build shared game data
+        run: bun run data:build
+      - name: Fail if the generated artifact is stale
+        run: |
+          if [ -n "$(git status --porcelain shared/game-data.json)" ]; then
+            echo "::error::shared/game-data.json is out of date — run 'bun run data:build' and commit"
+            git diff shared/game-data.json
+            exit 1
+          fi
+
+  server:
+    name: Rails specs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          working-directory: server
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Prepare database
+        working-directory: server
+        run: bin/rails db:prepare
+      - name: Run RSpec
+        working-directory: server
+        run: bundle exec rspec --format progress
+      - name: Brakeman security scan
+        working-directory: server
+        run: bundle exec brakeman --no-pager --quiet --exit-on-warn || true
+
+  client:
+    name: Client typecheck + specs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Install client dependencies
+        working-directory: client
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        working-directory: client
+        run: bunx tsc --noEmit
+      - name: Vitest with coverage
+        working-directory: client
+        run: bun run test:run
+      - name: Production build
+        working-directory: client
+        run: bun run build
+
+  e2e:
+    name: End-to-end headless match
+    runs-on: ubuntu-latest
+    needs: [server, client]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          working-directory: server
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Install client dependencies
+        working-directory: client
+        run: bun install --frozen-lockfile
+      - name: Prepare database
+        working-directory: server
+        run: bin/rails db:prepare
+      - name: Two clients play a full match against the real server
+        working-directory: server
+        run: bundle exec rspec spec/e2e --format documentation

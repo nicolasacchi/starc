@@ -1,0 +1,55 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "types": [
+      "vitest/globals",
+      "@types/three"
+    ],
+    "paths": {
+      "@render/*": [
+        "./src/render/*"
+      ],
+      "@game/*": [
+        "./src/game/*"
+      ],
+      "@ui/*": [
+        "./src/ui/*"
+      ],
+      "@net/*": [
+        "./src/net/*"
+      ],
+      "@shared/*": [
+        "./src/shared/*"
+      ],
+      "@data": [
+        "../shared/game-data.json"
+      ],
+      "@data/maps": [
+        "../shared/data/maps.json"
+      ]
+    }
+  },
+  "include": [
+    "src"
+  ]
+}

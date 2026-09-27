@@ -1,0 +1,775 @@
+{
+  "race": "terran",
+  "label": "Terran",
+  "color": "#f2a33c",
+  "units": [
+    {
+      "key": "scv",
+      "name": "SCV",
+      "kind": "unit",
+      "hotkey": "G",
+      "tier": 1,
+      "cost": {
+        "minerals": 50,
+        "vespene": 0,
+        "supply": 1
+      },
+      "build_time": 17,
+      "hp": 45,
+      "armor": 0,
+      "sight": 8,
+      "speed": 3.0,
+      "size": {
+        "radius": 0.5,
+        "height": 1.4
+      },
+      "movement": "ground",
+      "attack": {
+        "weapon": "none"
+      },
+      "harvest": {
+        "capacity": 10,
+        "rate": 0.5,
+        "refund_pct": 0.5
+      },
+      "abilities": [
+        {
+          "key": "scv_repair",
+          "name": "Repair",
+          "cooldown": 0,
+          "target": "ally_unit",
+          "effect": "heal",
+          "magnitude": 14.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "command_center"
+      ]
+    },
+    {
+      "key": "marine",
+      "name": "Marine",
+      "kind": "unit",
+      "hotkey": "A",
+      "tier": 1,
+      "cost": {
+        "minerals": 50,
+        "vespene": 0,
+        "supply": 1
+      },
+      "build_time": 12,
+      "hp": 45,
+      "armor": 0,
+      "sight": 9,
+      "speed": 4.0,
+      "size": {
+        "radius": 0.5,
+        "height": 1.8
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 6,
+        "range": 5.0,
+        "cooldown": 0.61,
+        "weapon": "bullet",
+        "projectile_speed": 50.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "stimpack",
+          "name": "Stimpack",
+          "cooldown": 15.0,
+          "target": "self",
+          "effect": "speed_boost",
+          "magnitude": 1.5,
+          "duration_s": 15.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "barracks"
+      ]
+    },
+    {
+      "key": "firebat",
+      "name": "Firebat",
+      "kind": "unit",
+      "hotkey": "Q",
+      "tier": 1,
+      "cost": {
+        "minerals": 50,
+        "vespene": 25,
+        "supply": 1
+      },
+      "build_time": 15,
+      "hp": 50,
+      "armor": 1,
+      "sight": 8,
+      "speed": 3.5,
+      "size": {
+        "radius": 0.6,
+        "height": 1.8
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 8,
+        "range": 4.5,
+        "cooldown": 0.86,
+        "weapon": "cannon",
+        "projectile_speed": 35.0,
+        "targets": [
+          "ground",
+          "structure"
+        ],
+        "splash": {
+          "radius": 0.8,
+          "damage_pct": 1.0
+        }
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "incendiary_missile",
+          "name": "Incendiary Missile",
+          "cooldown": 25.0,
+          "target": "enemy_unit",
+          "effect": "damage",
+          "magnitude": 40.0,
+          "radius": 0.8
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "barracks"
+      ]
+    },
+    {
+      "key": "siege_tank",
+      "name": "Siege Tank",
+      "kind": "unit",
+      "hotkey": "W",
+      "tier": 2,
+      "cost": {
+        "minerals": 150,
+        "vespene": 125,
+        "supply": 3
+      },
+      "build_time": 40,
+      "hp": 175,
+      "armor": 3,
+      "sight": 9,
+      "speed": 1.5,
+      "size": {
+        "radius": 1.1,
+        "height": 1.6
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 60,
+        "range": 7.0,
+        "cooldown": 1.86,
+        "weapon": "cannon",
+        "projectile_speed": 35.0,
+        "targets": [
+          "ground",
+          "structure"
+        ],
+        "splash": {
+          "radius": 1.5,
+          "damage_pct": 0.5
+        }
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "siege_mode",
+          "name": "Siege Mode",
+          "cooldown": 0,
+          "target": "self",
+          "effect": "attack_boost",
+          "magnitude": 2.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "factory"
+      ]
+    },
+    {
+      "key": "thor",
+      "name": "Thor",
+      "kind": "unit",
+      "hotkey": "E",
+      "tier": 2,
+      "cost": {
+        "minerals": 300,
+        "vespene": 200,
+        "supply": 3
+      },
+      "build_time": 60,
+      "hp": 400,
+      "armor": 6,
+      "sight": 8,
+      "speed": 1.5,
+      "size": {
+        "radius": 1.1,
+        "height": 2.4
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 90,
+        "range": 5.5,
+        "cooldown": 2.37,
+        "weapon": "plasma",
+        "projectile_speed": 40.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ],
+        "splash": {
+          "radius": 1.2,
+          "damage_pct": 0.35
+        }
+      },
+      "harvest": null,
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "factory"
+      ]
+    },
+    {
+      "key": "reaper",
+      "name": "Reaper",
+      "kind": "unit",
+      "hotkey": "Z",
+      "tier": 1,
+      "cost": {
+        "minerals": 50,
+        "vespene": 50,
+        "supply": 1
+      },
+      "build_time": 17,
+      "hp": 45,
+      "armor": 0,
+      "sight": 10,
+      "speed": 4.6,
+      "size": {
+        "radius": 0.5,
+        "height": 1.6
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 8,
+        "range": 4.5,
+        "cooldown": 0.86,
+        "weapon": "bullet",
+        "projectile_speed": 55.0,
+        "targets": [
+          "ground",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "reaper_cloak",
+          "name": "Cloak",
+          "cooldown": 0,
+          "target": "self",
+          "effect": "cloak",
+          "duration_s": 30.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "factory"
+      ],
+      "vision": 12.0
+    },
+    {
+      "key": "ghost",
+      "name": "Ghost",
+      "kind": "unit",
+      "hotkey": "X",
+      "tier": 2,
+      "cost": {
+        "minerals": 150,
+        "vespene": 125,
+        "supply": 2
+      },
+      "build_time": 40,
+      "hp": 125,
+      "armor": 0,
+      "sight": 10,
+      "speed": 4.0,
+      "size": {
+        "radius": 0.5,
+        "height": 1.8
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 30,
+        "range": 6.0,
+        "cooldown": 1.07,
+        "weapon": "missile",
+        "projectile_speed": 60.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "cloak",
+          "name": "Cloaking",
+          "cooldown": 0,
+          "target": "self",
+          "effect": "cloak",
+          "duration_s": 30.0
+        },
+        {
+          "key": "nuclear_strike",
+          "name": "Nuclear Strike",
+          "cooldown": 240.0,
+          "target": "point",
+          "effect": "damage",
+          "magnitude": 250.0,
+          "radius": 4.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "barracks"
+      ],
+      "vision": 12.0
+    },
+    {
+      "key": "battlecruiser",
+      "name": "Battlecruiser",
+      "kind": "unit",
+      "hotkey": "F",
+      "tier": 3,
+      "cost": {
+        "minerals": 400,
+        "vespene": 300,
+        "supply": 3
+      },
+      "build_time": 90,
+      "hp": 450,
+      "armor": 6,
+      "sight": 12,
+      "speed": 1.6,
+      "size": {
+        "radius": 2.0,
+        "height": 3.2
+      },
+      "movement": "air",
+      "attack": {
+        "damage": 45,
+        "range": 8.0,
+        "cooldown": 1.6,
+        "weapon": "beam",
+        "projectile_speed": 100.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "starport"
+      ]
+    },
+    {
+      "key": "raven",
+      "name": "Raven",
+      "kind": "unit",
+      "hotkey": "R",
+      "tier": 2,
+      "cost": {
+        "minerals": 100,
+        "vespene": 200,
+        "supply": 2
+      },
+      "build_time": 30,
+      "hp": 100,
+      "armor": 1,
+      "sight": 10,
+      "speed": 2.5,
+      "size": {
+        "radius": 0.7,
+        "height": 1.4
+      },
+      "movement": "ground",
+      "attack": {
+        "damage": 12,
+        "range": 6.0,
+        "cooldown": 1.0,
+        "weapon": "missile",
+        "projectile_speed": 40.0,
+        "targets": [
+          "ground",
+          "air",
+          "structure"
+        ]
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "combat_shielding",
+          "name": "Combat Shielding",
+          "cooldown": 0,
+          "target": "ally_unit",
+          "effect": "shield",
+          "magnitude": 40.0,
+          "duration_s": 10.0
+        },
+        {
+          "key": "seeker_missile",
+          "name": "Seeker Missile",
+          "cooldown": 10.0,
+          "target": "point",
+          "effect": "damage",
+          "magnitude": 100.0,
+          "radius": 0.6
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "factory"
+      ]
+    },
+    {
+      "key": "medic",
+      "name": "Medic",
+      "kind": "unit",
+      "hotkey": "C",
+      "tier": 1,
+      "cost": {
+        "minerals": 50,
+        "vespene": 75,
+        "supply": 1
+      },
+      "build_time": 20,
+      "hp": 60,
+      "armor": 0,
+      "sight": 9,
+      "speed": 4.0,
+      "size": {
+        "radius": 0.5,
+        "height": 1.8
+      },
+      "movement": "ground",
+      "attack": {
+        "weapon": "none"
+      },
+      "harvest": null,
+      "abilities": [
+        {
+          "key": "heal",
+          "name": "Heal",
+          "cooldown": 0,
+          "target": "ally_unit",
+          "effect": "heal",
+          "magnitude": 18.0
+        },
+        {
+          "key": "optical_flare",
+          "name": "Optical Flare",
+          "cooldown": 25.0,
+          "target": "point",
+          "effect": "reveal",
+          "radius": 6.0,
+          "duration_s": 8.0
+        }
+      ],
+      "produces": [],
+      "required_buildings": [
+        "barracks"
+      ]
+    }
+  ],
+  "buildings": [
+    {
+      "key": "command_center",
+      "name": "Command Center",
+      "kind": "building",
+      "hotkey": "B",
+      "tier": 1,
+      "cost": {
+        "minerals": 400,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 10
+      },
+      "build_time": 70,
+      "hp": 1500,
+      "armor": 3,
+      "sight": 10,
+      "size": {
+        "radius": 2.5,
+        "height": 3.0
+      },
+      "abilities": [],
+      "produces": [
+        "scv"
+      ],
+      "required_buildings": []
+    },
+    {
+      "key": "supply_depot",
+      "name": "Supply Depot",
+      "kind": "building",
+      "hotkey": "V",
+      "tier": 1,
+      "cost": {
+        "minerals": 100,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 8
+      },
+      "build_time": 30,
+      "hp": 400,
+      "armor": 1,
+      "sight": 8,
+      "size": {
+        "radius": 1.2,
+        "height": 1.8
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "command_center"
+      ]
+    },
+    {
+      "key": "refinery",
+      "name": "Refinery",
+      "kind": "building",
+      "hotkey": "N",
+      "tier": 1,
+      "cost": {
+        "minerals": 75,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 0
+      },
+      "build_time": 40,
+      "hp": 500,
+      "armor": 2,
+      "sight": 8,
+      "size": {
+        "radius": 1.8,
+        "height": 2.4
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "command_center"
+      ]
+    },
+    {
+      "key": "barracks",
+      "name": "Barracks",
+      "kind": "building",
+      "hotkey": "M",
+      "tier": 1,
+      "cost": {
+        "minerals": 150,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 0
+      },
+      "build_time": 50,
+      "hp": 800,
+      "armor": 2,
+      "sight": 9,
+      "size": {
+        "radius": 1.5,
+        "height": 2.2
+      },
+      "abilities": [],
+      "produces": [
+        "marine",
+        "firebat",
+        "ghost",
+        "medic"
+      ],
+      "required_buildings": [
+        "supply_depot"
+      ]
+    },
+    {
+      "key": "engineering_bay",
+      "name": "Engineering Bay",
+      "kind": "building",
+      "hotkey": "P",
+      "tier": 1,
+      "cost": {
+        "minerals": 125,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 0
+      },
+      "build_time": 40,
+      "hp": 600,
+      "armor": 2,
+      "sight": 9,
+      "size": {
+        "radius": 1.4,
+        "height": 2.0
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "supply_depot"
+      ]
+    },
+    {
+      "key": "factory",
+      "name": "Factory",
+      "kind": "building",
+      "hotkey": "O",
+      "tier": 2,
+      "cost": {
+        "minerals": 200,
+        "vespene": 100,
+        "supply": 0,
+        "supply_provided": 0
+      },
+      "build_time": 60,
+      "hp": 750,
+      "armor": 3,
+      "sight": 9,
+      "size": {
+        "radius": 1.7,
+        "height": 2.2
+      },
+      "abilities": [],
+      "produces": [
+        "siege_tank",
+        "thor",
+        "reaper",
+        "raven"
+      ],
+      "required_buildings": [
+        "barracks",
+        "refinery"
+      ]
+    },
+    {
+      "key": "starport",
+      "name": "Starport",
+      "kind": "building",
+      "hotkey": "U",
+      "tier": 3,
+      "cost": {
+        "minerals": 300,
+        "vespene": 200,
+        "supply": 0,
+        "supply_provided": 0
+      },
+      "build_time": 80,
+      "hp": 1000,
+      "armor": 3,
+      "sight": 10,
+      "size": {
+        "radius": 1.9,
+        "height": 2.6
+      },
+      "abilities": [],
+      "produces": [
+        "battlecruiser"
+      ],
+      "required_buildings": [
+        "factory"
+      ]
+    },
+    {
+      "key": "bunker",
+      "name": "Bunker",
+      "kind": "building",
+      "hotkey": "I",
+      "tier": 1,
+      "cost": {
+        "minerals": 100,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 0
+      },
+      "build_time": 30,
+      "hp": 800,
+      "armor": 6,
+      "sight": 8,
+      "size": {
+        "radius": 1.2,
+        "height": 1.4
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "command_center"
+      ],
+      "defense": {
+        "range": 6.0,
+        "cooldown": 0.86,
+        "damage": 30,
+        "weapon": "cannon",
+        "targets": [
+          "ground",
+          "structure"
+        ]
+      }
+    },
+    {
+      "key": "turret",
+      "name": "Missile Turret",
+      "kind": "building",
+      "hotkey": "K",
+      "tier": 1,
+      "cost": {
+        "minerals": 100,
+        "vespene": 0,
+        "supply": 0,
+        "supply_provided": 0
+      },
+      "build_time": 30,
+      "hp": 600,
+      "armor": 3,
+      "sight": 9,
+      "size": {
+        "radius": 1.0,
+        "height": 2.2
+      },
+      "abilities": [],
+      "produces": [],
+      "required_buildings": [
+        "engineering_bay"
+      ],
+      "defense": {
+        "range": 9.0,
+        "cooldown": 1.0,
+        "damage": 20,
+        "weapon": "bullet",
+        "targets": [
+          "ground",
+          "structure"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+# Ruby / Rails
+/server/vendor/bundle/
+/server/log/*.log
+/server/tmp/
+/server/storage/*.sqlite3
+/server/storage/*.sqlite3-*
+/server/.bundle/
+/server/coverage/
+
+# Node / Vite
+/client/node_modules/
+/client/dist/
+/client/coverage/
+
+# Root tooling
+/node_modules/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
