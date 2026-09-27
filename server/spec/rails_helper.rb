@@ -1,12 +1,20 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "fileutils"
 
 ENV["RAILS_ENV"] ||= "test"
+
+# Give each rspec process its own SQLite file. `use_transactional_fixtures`
+# holds a write transaction open for the whole example, so two processes
+# sharing one database block each other — WAL does not help, because only one
+# writer can exist at a time. `DATABASE_URL` pins a specific file, which is
+# how the e2e suite points its spawned server at the same database.
+#
+# `storage/test-<pid>.sqlite3` is removed on exit so runs do not accumulate.
+ENV["DATABASE_URL"] ||= "sqlite3:#{File.expand_path("../storage", __dir__)}/test-#{Process.pid}.sqlite3"
+
 require_relative "../config/environment"
-
-abort("The Rails environment is running in production mode!") if Rails.env.production?
-
 require "rspec/rails"
 
 Dir[Rails.root.join("spec/support/**/*.rb")].sort.each { |f| require f }
@@ -16,6 +24,8 @@ begin
 rescue ActiveRecord::PendingMigrationError => e
   abort e.to_s.strip
 end
+
+at_exit { FileUtils.rm_f(Dir["#{__dir__}/../storage/test-*.sqlite3{,-shm,-wal}"]) }
 
 RSpec.configure do |config|
   config.fixture_paths = [Rails.root.join("spec/fixtures")]

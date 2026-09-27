@@ -49,10 +49,35 @@ itself a JSON **string**.
 {"identifier":"{\"channel\":\"GameChannel\",\"match_id\":5}","message":{ ...game message... }}
 ```
 
-Routing is by `identifier`. A frame whose `identifier` matches no live
-subscription is ignored. `{"type":"disconnect","reconnect":false}` is a
-server-requested terminal close — the client must honour it and must not
-auto-reconnect.
+An inbound `message` payload is usually a **string** (the channels `transmit`
+a Ruby `to_json`), but a decoded object is accepted too. Routing is by exact
+`identifier` match; a frame for an identifier the client does not hold is
+dropped. `{"type":"disconnect","reconnect":false}` is a server-requested
+terminal close — the client must honour it and must not auto-reconnect, because
+retrying is guaranteed to fail identically.
+
+### Two ordering rules, both load-bearing
+
+1. **Nothing may be written before `{"type":"welcome"}`.** Subscribes and
+   messages issued earlier are queued and replayed in order.
+2. **A `message` waits for that subscription's `confirm_subscription`.** The
+   server registers a subscription asynchronously relative to the client's
+   write, and a `lobby:list` or `identify` that beats it is refused with
+   `RuntimeError - Unable to find subscription with identifier: …`. Hold
+   messages per identifier until the confirmation (bounded), and drop them if
+   the subscription is rejected instead.
+
+`ping` is fire-and-forget: the gem's own client answers nothing, so neither
+does ours. It only refreshes liveness for the connection-quality indicator.
+
+### `Origin`
+
+ActionCable refuses an upgrade whose `Origin` header is empty, so a
+**non-browser** client — a CLI, a bot, the e2e harness — cannot open `/cable`
+at all unless it sends an allowed origin. Browsers always set `Origin`, so the
+web client is unaffected. `ALLOWED_CABLE_ORIGINS` (comma-separated) widens
+`config.action_cable.allowed_request_origins`; production keeps the strict
+default unless it is set.
 
 ---
 

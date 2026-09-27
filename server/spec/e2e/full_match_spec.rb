@@ -41,6 +41,11 @@ RSpec.describe "a full match over the real stack", :e2e do
   MAX_IDS_PER_COMMAND = 256
 
   before(:all) do
+    # ActionCable refuses an upgrade whose `Origin` is not allowed, and this
+    # harness is not a browser, so it has to name one. The initializer widens
+    # `allowed_request_origins` from this variable, and the spawned server
+    # inherits the environment because `E2eServer.start!` does not clear it.
+    ENV["ALLOWED_CABLE_ORIGINS"] = "http://127.0.0.1,http://localhost"
     begin
       E2eServer.start!(boot_timeout: BOOT_TIMEOUT)
     rescue StandardError => e
@@ -84,7 +89,7 @@ RSpec.describe "a full match over the real stack", :e2e do
 
       begin
         delivery = client.messages(timeout: [remaining, 0.25].min,
-                                   description: "#{wanted} (last seen: #{describe_inbox(client)})")
+                                   description: "#{wanted} (already seen: #{client.describe_inbox})")
       rescue WebSocketClient::TimeoutError
         next
       end
@@ -101,10 +106,6 @@ RSpec.describe "a full match over the real stack", :e2e do
   end
 
   # A short, human-readable summary of what a client has seen, for failure text.
-  def describe_inbox(client)
-    counts = client.seen.tally
-    counts.empty? ? "nothing yet" : counts.map { |type, n| "#{type}x#{n}" }.join(", ")
-  end
 
   def http_json(method, path, token: nil, body: nil)
     uri = URI("#{E2eServer.base_url}#{path}")
@@ -192,6 +193,16 @@ RSpec.describe "a full match over the real stack", :e2e do
     @player_b[:client].subscribe(game_params)
     @game_key = CableClient.channel_key(game_params)
 
+    # The server registers a subscription asynchronously relative to the
+    # client's write, so a message that beats its own confirmation is refused
+    # outright. The client holds those frames; awaiting the confirmation here
+    # turns a broken ordering rule into a clear "never confirmed" failure
+    # instead of a `game:start` that silently never arrives.
+    [@player_a[:client], @player_b[:client]].each do |client|
+      client.await_confirmation(CableClient.channel_key(channel: "LobbyChannel"), timeout: CONNECT_TIMEOUT)
+      client.await_confirmation(@game_key, timeout: CONNECT_TIMEOUT)
+    end
+
     [@player_a, @player_b].each do |player|
       player[:client].send_message(game_params, { "v" => 1, "t" => "identify", "token" => player[:token] })
     end
@@ -265,10 +276,10 @@ RSpec.describe "a full match over the real stack", :e2e do
   def collect_snapshots(client, count, timeout: SNAPSHOT_TIMEOUT)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
     snapshots = []
-
     while snapshots.size < count
       remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
       raise "timed out after #{timeout}s waiting for #{count} snapshots, got #{snapshots.size}\n" \
+            "already seen by #{client.label}: #{client.describe_inbox}\n" \
             "--- e2e server log ---\n#{E2eServer.log_tail}" if remaining <= 0
 
       begin
@@ -579,6 +590,7 @@ RSpec.describe "a full match over the real stack", :e2e do
     game_params = { channel: "GameChannel", match_id: @match_id }
     key = bystander.subscribe(game_params)
 
+    bystander.await_confirmation(CableClient.channel_key(game_params), timeout: CONNECT_TIMEOUT)
     bystander.send_message(game_params, { "v" => 1, "t" => "game:command", "id" => SecureRandom.uuid,
                                           "from_tick" => 0,
                                           "commands" => [{ "c" => "move", "ids" => [1], "x" => 40.0, "z" => 40.0 }] })
@@ -622,6 +634,7 @@ RSpec.describe "a full match over the real stack", :e2e do
     latecomer = open_cable({ name: "latecomer", id: @player_a[:id], token: @player_a[:token] }, "Latecomer")
     game_params = { channel: "GameChannel", match_id: @match_id }
     latecomer.subscribe(game_params)
+    latecomer.await_confirmation(CableClient.channel_key(game_params), timeout: CONNECT_TIMEOUT)
     latecomer.send_message(game_params, { "v" => 1, "t" => "identify", "token" => @player_a[:token] })
 
     start = expect_game_start!(latecomer)

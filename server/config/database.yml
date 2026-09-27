@@ -19,6 +19,15 @@ development:
 test:
   <<: *default
   database: storage/test.sqlite3
+  # Write-Ahead Logging plus a real busy timeout. Without WAL a second process
+  # — a parallel rspec run, or the e2e server, which is a separate process
+  # against this same file — fails outright with "database is locked" rather
+  # than waiting. WAL lets readers run alongside the writer, and busy_timeout
+  # makes a competing writer wait its turn instead of erroring.
+  pragmas:
+    journal_mode: wal
+    synchronous: normal
+    busy_timeout: 15000
 
 # SQLite3 write its data on the local filesystem, as such it requires
 # persistent disks. If you are deploying to a managed service, you should
