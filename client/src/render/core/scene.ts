@@ -14,6 +14,7 @@
 import * as THREE from "three";
 import type { MapDef } from "@shared/protocol";
 import type { QualitySettings } from "./quality";
+import { createSunState, sunStateFor } from "@render/lighting/lighting";
 
 /**
  * Converts a map's authored `fog_density` into the coefficient this client
@@ -33,21 +34,17 @@ import type { QualitySettings } from "./quality";
 export const FOG_DENSITY_SCALE = 0.23;
 
 /**
- * Fog colour for a map's time of day: warm and bright at the horizon near the
- * sun, cold and dense at midnight. The map's own sun colour is mixed in so the
- * fog and the key light never disagree.
+ * Fog colour for a map's time of day, taken from the same sky evaluation the
+ * lighting rig and the sky dome use, so the haze can never disagree with the
+ * horizon behind it. `LightingRig` refreshes `scene.fog.color` from the same
+ * state every frame; this is the value the scene starts life with, so a scene
+ * with no rig is still fogged in the right colour.
  */
 export function fogColorFor(map: MapDef): THREE.Color {
   const timeOfDay = THREE.MathUtils.clamp(map.lighting?.time_of_day ?? 0.5, 0, 1);
-  const sun = new THREE.Color(map.lighting?.sun_color ?? "#ffffff");
-  // time 0.5 (noon) -> pale white-blue; 0/1 (midnight) -> deep indigo.
-  const night = new THREE.Color(0x0a0f1e);
-  const day = new THREE.Color(0x9fb4c8);
-  const dusk = new THREE.Color(0x6a4a52);
-  const solar = Math.abs(timeOfDay - 0.5) * 2; // 0 at noon, 1 at either horizon
-  const base = night.clone().lerp(day, 1 - solar);
-  if (solar > 0) base.lerp(dusk, (solar - 0.5) * 2 * 0.6);
-  return base.lerp(sun, 0.35);
+  const mapTint = new THREE.Color().setStyle(map.lighting?.sun_color ?? "#ffffff", THREE.SRGBColorSpace);
+  const state = sunStateFor(timeOfDay, createSunState(), mapTint);
+  return state.skyHorizon.clone().lerp(state.skyZenith, 0.35);
 }
 
 /**

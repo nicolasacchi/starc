@@ -89,7 +89,11 @@ function wrapPhase(t: number): number {
  * `out` in the renderer's working (linear) colour space.
  */
 function kelvinToColor(kelvin: number, out: THREE.Color): THREE.Color {
-  const t = clamp01((Math.min(Math.max(kelvin, 1000), 40000) - 1000) / 39000) * 39 + 1;
+  // Helland's fit takes `t` in units of 100 K, so 3000 K is `t = 30`. Mapping
+  // kelvin onto 1..40 here instead collapsed every realistic sun to pure red
+  // (`t <= 19` clamps both green and blue to zero), which is what turned the
+  // red key light plus the blue zenith into a mauve sky and a mauve ground.
+  const t = Math.min(Math.max(kelvin, 1000), 40000) / 100;
   let r: number;
   let g: number;
   let b: number;
@@ -201,7 +205,11 @@ export function sunStateFor(timeOfDay: number, out: SunState, mapTint?: THREE.Co
   // The horizon is the sun's own colour washed towards the zenith — that is
   // what makes low sun bleed orange across the whole skyline.
   _horizon.lerp(out.skyZenith, 0.25);
-  _temp.copy(out.color).lerp(out.skyZenith, 0.6);
+  // How far the horizon leans on the zenith rather than on the sun's own
+  // colour. A high sun gives a pale blue-white skyline; a low sun gives a warm
+  // one, which is the whole point of having a separate horizon colour.
+  const horizonMix = clamp01(0.72 - 0.42 * warmth);
+  _temp.copy(out.color).lerp(out.skyZenith, horizonMix);
   out.skyHorizon.copy(_horizon).lerp(_temp, w);
 
   if (groundTint) {
