@@ -72,6 +72,7 @@ function smoothDamp(spring: Spring, target: number, smoothTime: number, dt: numb
   const next = target + (change + temp) * decay;
   // Guard the overshoot case the analytic solution can still cross at low fps.
   if (target - spring.value > 0 === next > target) {
+    // (moving away from the target and the step crossed it, or vice versa)
     spring.value = target;
     spring.velocity = 0;
     return target;
@@ -95,8 +96,8 @@ export class RtsCamera {
   private readonly map: MapDef;
 
   /** Ground point the rig is looking at (smoothed). */
-  private readonly focusX: Spring = { value: 0, velocity: 0 };
-  private readonly focusZ: Spring = { value: 0, velocity: 0 };
+  private readonly focusSpringX: Spring = { value: 0, velocity: 0 };
+  private readonly focusSpringZ: Spring = { value: 0, velocity: 0 };
   private readonly zoomSpring: Spring = { value: 1, velocity: 0 };
   private readonly yawSpring: Spring = { value: 0, velocity: 0 };
 
@@ -148,8 +149,8 @@ export class RtsCamera {
     this.targetZoom = 1;
     this.zoomSpring.value = 1;
     const centre = map.size * 0.5;
-    this.focusX.value = centre;
-    this.focusZ.value = centre;
+    this.focusSpringX.value = centre;
+    this.focusSpringZ.value = centre;
     this.targetX = centre;
     this.targetZ = centre;
     this.attach();
@@ -172,6 +173,16 @@ export class RtsCamera {
   /** Current smoothed yaw in radians. */
   get yaw(): number {
     return this.yawSpring.value;
+  }
+
+  /** Smoothed world X the rig is centred on. */
+  get focusX(): number {
+    return this.focusSpringX.value;
+  }
+
+  /** Smoothed world Z the rig is centred on. */
+  get focusZ(): number {
+    return this.focusSpringZ.value;
   }
 
   /** Current yaw target, in radians — the value the spring is chasing. */
@@ -243,14 +254,15 @@ export class RtsCamera {
   update(deltaSeconds: number): void {
     if (this.disposed) return;
     const dt = THREE.MathUtils.clamp(deltaSeconds, 0, 0.1);
-    this.elapsed += dt;
+    // Wrapped so a long session cannot lose float precision in the shake maths.
+    this.elapsed = (this.elapsed + dt) % 3600;
 
     this.applyKeyboardPan(dt);
     this.applyEdgeScroll(dt);
     this.applyKeyRotation(dt);
 
-    smoothDamp(this.focusX, this.targetX, FOLLOW_SMOOTH_TIME, dt);
-    smoothDamp(this.focusZ, this.targetZ, FOLLOW_SMOOTH_TIME, dt);
+    smoothDamp(this.focusSpringX, this.targetX, FOLLOW_SMOOTH_TIME, dt);
+    smoothDamp(this.focusSpringZ, this.targetZ, FOLLOW_SMOOTH_TIME, dt);
     smoothDamp(this.zoomSpring, this.targetZoom, ZOOM_SMOOTH_TIME, dt);
     smoothDamp(this.yawSpring, this.targetYaw, YAW_SMOOTH_TIME, dt);
 
@@ -259,12 +271,10 @@ export class RtsCamera {
 
   /** Writes the transform onto the underlying camera. */
   private apply(dt: number): void {
-    // Keep the focus inside the playable area, allowing a little overshoot so
-    // the camera edge can hang over the border the way an RTS should.
     const slackX = Math.min(this.map.size * 0.25, this.viewWidth() * 0.5) + BOUNDS_MARGIN;
     const slackZ = Math.min(this.map.size * 0.25, this.viewHeight() * 0.5) + BOUNDS_MARGIN;
-    const fx = THREE.MathUtils.clamp(this.focusX.value, -slackX, this.map.size + slackX);
-    const fz = THREE.MathUtils.clamp(this.focusZ.value, -slackZ, this.map.size + slackZ);
+    const fx = THREE.MathUtils.clamp(this.focusSpringX.value, -slackX, this.map.size + slackX);
+    const fz = THREE.MathUtils.clamp(this.focusSpringZ.value, -slackZ, this.map.size + slackZ);
     const sampled = heightField(this.map).sample(
       THREE.MathUtils.clamp(fx, 0, this.map.size),
       THREE.MathUtils.clamp(fz, 0, this.map.size),
@@ -290,9 +300,10 @@ export class RtsCamera {
       return;
     }
     this.shakeTime += dt;
-    // Trauma decays linearly over the requested duration; displacement follows
-    // trauma², so the curve is front-loaded like a real concussion.
-    this.trauma = Math.max(0, 1 - this.shakeTime / this.shakeDuration);
+    // Trauma decays linearly from whatever `addShake` accumulated, not from 1.
+    // Ramping from 1 would silently discard the caller's intensity, making a
+    // rifle hit shake the camera as hard as a building collapsing.
+    this.trauma = Math.max(0, this.trauma * (1 - this.shakeTime / this.shakeDuration));
     const amount = this.trauma * this.trauma;
     const scale = MAX_SHAKE_OFFSET * amount * distanceScale(this.zoomSpring.value);
     this.camera.position.x += wobble(this.elapsed, 1.7) * scale;
@@ -399,7 +410,11 @@ export class RtsCamera {
     return true;
   }
 
-  /** Unprojected world ray through a client-space pixel. */
+  /**
+   * Unprojected world ray through a client-space pixel. The returned instance
+   * is owned by the controller and is overwritten by the next call — copy it if
+   * you need to keep it.
+   */
   screenRay(clientX: number, clientY: number): THREE.Ray {
     const width = this.viewportWidth();
     const height = this.viewportHeight();
@@ -498,14 +513,6 @@ export class RtsCamera {
     element.addEventListener("blur", this.onBlur);
     element.addEventListener("contextmenu", this.onContextMenu);
   }
-
-  private onWheel: ((event: WheelEvent) => void) | null = null;
-  private onKeyDown: ((event: KeyboardEvent) => void) | null = null;
-  private onKeyUp: ((event: KeyboardEvent) => void) | null = null;
-  private onPointerMove: ((event: PointerEvent) => void) | null = null;
-  private onPointerLeave: (() => void) | null = null;
-  private onBlur: (() => void) | null = null;
-  private onContextMenu: ((event: Event) => void) | null = null;
 
   dispose(): void {
     if (this.disposed) return;

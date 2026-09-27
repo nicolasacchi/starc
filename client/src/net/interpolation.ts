@@ -129,15 +129,14 @@ export function shortestAngleDelta(from: number, to: number): number {
 }
 
 export class Interpolator {
+  readonly buffer: SnapshotBuffer;
   readonly maxExtrapolationMs: number;
   /** Reused per-frame bookkeeping, so the steady state allocates nothing. */
   private readonly pool = new Map<number, InterpolatedEntity>();
   private readonly seen = new Set<number>();
 
-  constructor(
-    readonly buffer: SnapshotBuffer,
-    options: InterpolatorOptions = {},
-  ) {
+  constructor(buffer: SnapshotBuffer, options: InterpolatorOptions = {}) {
+    this.buffer = buffer;
     const requested = options.maxExtrapolationMs ?? MAX_EXTRAPOLATION_MS;
     this.maxExtrapolationMs = Math.min(1000, Math.max(0, requested));
   }
@@ -148,6 +147,7 @@ export class Interpolator {
    */
   sample(renderTimeMs: number, out: WorldSample): WorldSample {
     out.timeMs = renderTimeMs;
+    out.entities = this.pool;
     out.spawnIds.length = 0;
     out.despawnIds.length = 0;
     out.extrapolatedMs = 0;
@@ -155,7 +155,6 @@ export class Interpolator {
     out.nextTick = 0;
     out.alpha = 1;
     out.reliability = true;
-
     const newest = this.buffer.latest();
     if (!newest) {
       this.forgetAll();
@@ -170,10 +169,16 @@ export class Interpolator {
     if (!older) {
       // Render clock is behind everything we hold: clamp forward to the oldest
       // state rather than inventing motion we cannot see.
-      older = this.buffer.oldest();
-      newer = this.buffer.atOrAfter(older.tick);
+      const oldest = this.buffer.oldest();
+      if (!oldest) {
+        this.forgetAll();
+        out.reliability = false;
+        return out;
+      }
+      older = oldest;
+      const next = this.buffer.atOrAfter(oldest.tick);
+      newer = next && next.serverMs > renderTimeMs ? next : null;
       out.reliability = false;
-      if (newer && newer.serverMs <= renderTimeMs) newer = null;
     }
     out.tick = older.tick;
 
@@ -181,7 +186,7 @@ export class Interpolator {
       out.nextTick = newer.tick;
       const span = newer.serverMs - older.serverMs;
       out.alpha = span > 0 ? clamp01((renderTimeMs - older.serverMs) / span) : 1;
-      this.blend(older, newer, out.alpha);
+      this.blend(older, newer, out.alpha, out);
     } else {
       // Past the newest snapshot: continue along measured velocity, briefly.
       const previous = this.buffer.atOrBefore(older.tick - 1);
@@ -189,7 +194,7 @@ export class Interpolator {
       const step = Math.min(Math.max(ahead, 0), this.maxExtrapolationMs);
       out.extrapolatedMs = step;
       out.reliability = false;
-      this.continueFrom(previous, older, step);
+      this.continueFrom(previous, older, step, out);
     }
     return out;
   }
@@ -201,7 +206,7 @@ export class Interpolator {
 
   /* ------------------------------------------------------------- internals */
 
-  private blend(older: BufferedSnapshot, newer: BufferedSnapshot, alpha: number): void {
+  private blend(older: BufferedSnapshot, newer: BufferedSnapshot, alpha: number, out: WorldSample): void {
     const seen = this.seen;
     seen.clear();
 
@@ -217,7 +222,7 @@ export class Interpolator {
         view.ang = from.ang + shortestAngleDelta(from.ang, to.ang) * alpha;
         view.hp = from.hp + (to.hp - from.hp) * alpha;
         view.mp = from.mp + (to.mp - from.mp) * alpha;
-        view.w = from.w + ((to.w ?? 0) - from.w) * alpha;
+        view.w = (from.w ?? 0) + ((to.w ?? 0) - (from.w ?? 0)) * alpha;
         // Discrete state flips at the midpoint: the newer snapshot is the
         // future, and past halfway it is the more likely present.
         const flip = alpha >= 0.5 ? to : from;
@@ -225,6 +230,7 @@ export class Interpolator {
         view.prog = flip.prog ?? 0;
       } else {
         // Spawn: already fully where the newer snapshot put it.
+        out.spawnIds.push(id);
         view.x = to.x;
         view.y = to.y;
         view.z = to.z;
@@ -243,6 +249,7 @@ export class Interpolator {
     for (const [id, from] of older.entities) {
       if (newer.entities.has(id)) continue;
       // Despawn: hold the older state for this one frame, then drop it.
+      out.despawnIds.push(id);
       seen.add(id);
       const view = this.pool.get(id) ?? this.createView(from);
       copyStatic(view, from);
@@ -263,7 +270,7 @@ export class Interpolator {
     for (const id of this.pool.keys()) if (!seen.has(id)) this.pool.delete(id);
   }
 
-  private continueFrom(previous: BufferedSnapshot | null, newest: BufferedSnapshot, stepMs: number): void {
+  private continueFrom(previous: BufferedSnapshot | null, newest: BufferedSnapshot, stepMs: number, out: WorldSample): void {
     const seen = this.seen;
     seen.clear();
     for (const [id, to] of newest.entities) {
@@ -271,7 +278,7 @@ export class Interpolator {
       const view = this.pool.get(id) ?? this.createView(to);
       copyStatic(view, to);
       const from = previous?.entities.get(id);
-      if (from && stepMs > 0) {
+      if (from && previous && stepMs > 0) {
         const span = newest.serverMs - previous.serverMs;
         if (span > 0) {
           const k = stepMs / span;

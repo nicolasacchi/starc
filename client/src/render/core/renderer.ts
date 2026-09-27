@@ -7,7 +7,7 @@
  * client is generated procedurally at runtime.
  */
 import * as THREE from "three";
-import type { QualityPreset, QualitySettings } from "./quality";
+import type { QualityPreset } from "./quality";
 import { settingsFor } from "./quality";
 
 /** Tone-mapped exposure for the whole client; art-directed, not physical. */

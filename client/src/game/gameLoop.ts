@@ -178,9 +178,10 @@ function defaultScheduler(): { raf: (cb: (timeMs: number) => void) => number; ca
     };
   }
   // Node, and any environment without a display: a 60 Hz timer keeps the loop
-  // drivable instead of silently doing nothing.
+  // drivable instead of silently doing nothing. Under this project's lib set
+  // `setTimeout` hands back the DOM `number` handle.
   return {
-    raf: (cb) => setTimeout(() => cb(defaultNow()), 16) as unknown as number,
-    caf: (h) => clearTimeout(h as unknown as ReturnType<typeof setTimeout>),
+    raf: (cb) => setTimeout(() => cb(defaultNow()), 16),
+    caf: (h) => clearTimeout(h),
   };
 }

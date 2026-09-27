@@ -72,12 +72,16 @@ export interface EntityView {
   setOrder?(order: OrderKind, targetX: number, targetZ: number, progress: number): void;
   /** Per-frame animation. Called once per view per frame by `SceneManager`. */
   update(deltaSeconds: number): void;
+  /** Fired when this entity shoots, so the rig can recoil. */
+  onShot?(): void;
 
   /** Current vitals, read by the HUD layers. */
   readonly hp: number;
   readonly hpMax: number;
   readonly shield: number;
   readonly shieldMax: number;
+  readonly visible: boolean;
+  readonly selected: boolean;
   readonly primary: boolean;
   readonly relation: Relation;
   readonly state: EntityState;

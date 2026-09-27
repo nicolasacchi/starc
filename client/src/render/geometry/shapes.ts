@@ -809,13 +809,14 @@ export function treadedBlock(
       ridge.translate(side * w * 0.45, ridgeY, -d / 2 + step * (i + 0.5));
       parts.push(ridge);
     }
+    // End rollers sit so their disc is tangent to the ground plane.
     const roller = chamferedCylinder(h * 0.3, h * 0.3, w * 0.1, 8, uvScale);
     roller.rotateZ(side * -Math.PI * 0.5);
-    roller.translate(side * w * 0.5, h * 0.16, d * 0.36);
+    roller.translate(side * w * 0.5, h * 0.3, d * 0.36);
     parts.push(roller);
     const rollerBack = chamferedCylinder(h * 0.3, h * 0.3, w * 0.1, 8, uvScale);
     rollerBack.rotateZ(side * -Math.PI * 0.5);
-    rollerBack.translate(side * w * 0.5, h * 0.16, -d * 0.36);
+    rollerBack.translate(side * w * 0.5, h * 0.3, -d * 0.36);
     parts.push(rollerBack);
   }
   const merged = mergeGeometries(parts, false);

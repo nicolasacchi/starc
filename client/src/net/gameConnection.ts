@@ -231,7 +231,7 @@ export class GameConnection {
     return this.localPlayerId;
   }
 
-  get start(): GameStartMessage | null {
+  get startMessage(): GameStartMessage | null {
     return this.startInfo;
   }
 
@@ -731,12 +731,13 @@ function defaultUuid(): string {
   return out.slice(0, 32);
 }
 
+/** Rough serialised cost of one entity and one event, for the bandwidth series. */
+const ENTITY_FRAME_BYTES = 96;
+const EVENT_FRAME_BYTES = 48;
+
 /** Rough serialised size of a snapshot, for the bandwidth series. */
 function estimateBytes(msg: GameSnapshotMessage): number {
-  let bytes = 0;
-  for (const entity of msg.entities) bytes += 96;
-  for (const event of msg.events) bytes += 48;
-  return bytes;
+  return msg.entities.length * ENTITY_FRAME_BYTES + msg.events.length * EVENT_FRAME_BYTES;
 }
 
 /** The local player's id from a `game:start` roster, or null when unknowable. */

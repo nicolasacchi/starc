@@ -249,7 +249,7 @@ const hitNormal = new THREE.Vector3();
  * marches the authoritative height field instead, which is both exact and
  * cheaper than 300k triangles.
  */
-function makeHeightFieldRaycast(map: MapDef): THREE.Mesh["raycast"] {
+function makeHeightFieldRaycast(map: MapDef, mesh: THREE.Mesh): THREE.Mesh["raycast"] {
   const field = heightField(map);
   let maxHeight = 0;
   for (let i = 0; i < field.grid.length; i++) {
@@ -268,7 +268,7 @@ function makeHeightFieldRaycast(map: MapDef): THREE.Mesh["raycast"] {
     let previous = origin.y + direction.y * t - field.sample(origin.x + direction.x * t, origin.z + direction.z * t);
     // Step grows with distance: a fixed 0.5 m step would need thousands of
     // samples to reach the far side of the map.
-    for (let step = 0.5; t < limit; ) {
+    while (t < limit) {
       const next = t + Math.max(0.5, t * 0.02);
       const px = origin.x + direction.x * next;
       const py = origin.y + direction.y * next;
@@ -288,7 +288,7 @@ function makeHeightFieldRaycast(map: MapDef): THREE.Mesh["raycast"] {
         hitPoint.set(origin.x + direction.x * h, origin.y + direction.y * h, origin.z + direction.z * h);
         const n = field.normal(hitPoint.x, hitPoint.z);
         hitNormal.set(n.x, n.y, n.z);
-        intersects.push(new THREE.Intersection(hitPoint.clone(), hitNormal.clone(), h, meshOf(raycaster)));
+        intersects.push(new THREE.Intersection(hitPoint.clone(), hitNormal.clone(), h, mesh));
         return;
       }
       t = next;
@@ -297,6 +297,3 @@ function makeHeightFieldRaycast(map: MapDef): THREE.Mesh["raycast"] {
   };
 }
 
-function meshOf(raycaster: THREE.Raycaster): THREE.Object3D {
-  return raycaster.camera ?? raycaster.ray;
-}

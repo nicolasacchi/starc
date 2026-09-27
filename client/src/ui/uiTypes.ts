@@ -225,17 +225,26 @@ export function docOf(root: HTMLElement): Document {
   }
   return doc;
 }
-
-export function el<K extends keyof HTMLElementTagNameMap>(
-  doc: Document,
-  tag: K,
-  className?: string,
-  text?: string,
-): HTMLElementTagNameMap[K] {
-  const node = doc.createElement(tag);
-  if (className !== undefined) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
+/** A labelled text input with an inline error slot underneath. */
+export function field(doc: Document, spec: FieldSpec): FieldRefs {
+  const row = el(doc, "div", "field");
+  const id = `sc-${spec.id}`;
+  const label = el(doc, "label", "field__label", spec.label);
+  label.htmlFor = id;
+  const input = el(doc, "input", "field__input");
+  input.id = id;
+  input.type = spec.type ?? "text";
+  input.autocomplete = spec.autocomplete ?? "off";
+  input.spellcheck = false;
+  if (spec.placeholder !== undefined) input.placeholder = spec.placeholder;
+  if (spec.value !== undefined) input.value = spec.value;
+  if (spec.maxLength !== undefined) input.maxLength = spec.maxLength;
+  if (spec.hint !== undefined) input.title = spec.hint;
+  const error = el(doc, "p", "field__error");
+  error.id = `${id}-error`;
+  input.setAttribute("aria-describedby", error.id);
+  row.append(label, input, error);
+  return { row, input, error };
 }
 
 /** Removes every child; `removeChild` is the universally implemented path. */
@@ -289,32 +298,6 @@ export interface FieldSpec {
   hint?: string;
 }
 
-/** A labelled text input with an inline error slot underneath. */
-export function field(doc: Document, spec: FieldSpec, teardown?: Teardown): FieldRefs {
-  const row = el(doc, "div", "field");
-  const id = `sc-${spec.id}`;
-  const label = el(doc, "label", "field__label", spec.label);
-  label.htmlFor = id;
-  const input = el(doc, "input", "field__input");
-  input.id = id;
-  input.type = spec.type ?? "text";
-  input.autocomplete = spec.autocomplete ?? "off";
-  input.spellcheck = false;
-  if (spec.placeholder !== undefined) input.placeholder = spec.placeholder;
-  if (spec.value !== undefined) input.value = spec.value;
-  if (spec.maxLength !== undefined) input.maxLength = spec.maxLength;
-  if (spec.hint !== undefined) input.title = spec.hint;
-  const error = el(doc, "p", "field__error");
-  error.id = `${id}-error`;
-  input.setAttribute("aria-describedby", error.id);
-  row.append(label, input, error);
-  if (teardown) {
-    teardown.add(() => {
-      label.htmlFor = "";
-    });
-  }
-  return { row, input, error };
-}
 
 export interface SelectSpec<T extends string> {
   className?: string;

@@ -19,8 +19,12 @@
 
 export type EventHandler<TPayload> = (payload: TPayload) => void;
 
-/** Map of event name → payload type. */
-export type EventMap = Record<string, unknown>;
+/**
+ * Map of event name → payload type. Any object with matching key and payload
+ * types qualifies; an index signature is deliberately not required, so a plain
+ * `interface` works as a map.
+ */
+export type EventMap = object;
 
 /** Returned by `on`/`once`; safe to call more than once. */
 export type Unsubscribe = () => void;
@@ -30,7 +34,6 @@ type HandlerSet<M extends EventMap> = Map<keyof M, Set<EventHandler<never>>>;
 
 export class TypedEmitter<M extends EventMap> {
   private readonly handlers: HandlerSet<M> = new Map();
-
   /** Registers `handler` for `type`; the returned function removes it. */
   on<K extends keyof M & string>(type: K, handler: EventHandler<M[K]>): Unsubscribe {
     let set = this.handlers.get(type);

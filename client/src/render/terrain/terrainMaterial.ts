@@ -393,45 +393,57 @@ ${GLSL_NOISE}
 attribute float aLevel;
 varying vec3 vTerrWorld;
 varying vec3 vTerrNormal;
-vec2 gTerrXZ;
-float gTerrY;
+vec2 gClipmapXZ;
+float gClipmapY;
+float gClipmapCell;
+float gClipmapMorph;
 vec3 gTerrNormal;
-`;
-
-const GLSL_VERTEX_NORMAL = /* glsl */ `
-vec3 objectNormal = vec3( normal );
 
 // --- geometry clipmap: morph this level's outer band onto the parent grid ---
 // Every level is centred on the same snapped origin (see terrainMesh.ts), so
 // world XZ is already aligned to every level's grid: the CDLOD morph below
-// needs no extra uniforms and lands the outermost ring of this level exactly
-// on the innermost ring of the next one. No cracks, no stitching skirts.
-vec2 scOrigin = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;
-vec2 scLocal = position.xz + scOrigin;
-float scCell = uCell0 * exp2( aLevel );
-float scHalf = uCell0 * uLevelHalf * exp2( aLevel );
-float scMorph = aLevel < uRingCount ? smoothstep( 0.66, 1.0, max( abs( scLocal.x ), abs( scLocal.y ) ) / scHalf ) : 0.0;
-vec2 scGrid = scLocal / ( 2.0 * scCell );
-vec2 scFrac = fract( scGrid );
-vec2 scMorphed = ( floor( scGrid ) + mix( scFrac, vec2( 0.5 ), scMorph ) ) * ( 2.0 * scCell );
-vec2 scXZ = scMorph > 0.0 ? scMorphed : scLocal;
+// needs no extra uniforms, and it lands the outermost ring of this level
+// exactly on the innermost ring of the next one. No cracks, no stitch skirts.
+void scClipmap( vec3 pos ) {
+  vec2 origin = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;
+  vec2 local = pos.xz + origin;
+  float cell = uCell0 * exp2( aLevel );
+  float halfExtent = uCell0 * uLevelHalf * exp2( aLevel );
+  float morph = aLevel < uRingCount
+    ? smoothstep( 0.66, 1.0, max( abs( local.x ), abs( local.y ) ) / halfExtent )
+    : 0.0;
+  vec2 grid = local / ( 2.0 * cell );
+  vec2 morphed = ( floor( grid ) + mix( fract( grid ), vec2( 0.5 ), morph ) ) * ( 2.0 * cell );
+  gClipmapXZ = morph > 0.0 ? morphed : local;
+  gClipmapCell = cell;
+  gClipmapMorph = morph;
+  gClipmapY = scHeightAt( gClipmapXZ );
+}
+`;
 
-float scEps = scCell * ( 1.0 + scMorph );
-float scH = scHeightAt( scXZ );
-float scHL = scHeightAt( scXZ - vec2( scEps, 0.0 ) );
-float scHR = scHeightAt( scXZ + vec2( scEps, 0.0 ) );
-float scHD = scHeightAt( scXZ - vec2( 0.0, scEps ) );
-float scHU = scHeightAt( scXZ + vec2( 0.0, scEps ) );
+const GLSL_VERTEX_NORMAL = /* glsl */ `
+vec3 objectNormal = vec3( normal );
+scClipmap( position );
+float scEps = gClipmapCell * ( 1.0 + gClipmapMorph );
+float scHL = scHeightAt( gClipmapXZ - vec2( scEps, 0.0 ) );
+float scHR = scHeightAt( gClipmapXZ + vec2( scEps, 0.0 ) );
+float scHD = scHeightAt( gClipmapXZ - vec2( 0.0, scEps ) );
+float scHU = scHeightAt( gClipmapXZ + vec2( 0.0, scEps ) );
 gTerrNormal = normalize( vec3( scHL - scHR, 2.0 * scEps, scHD - scHU ) );
-gTerrXZ = scXZ;
-gTerrY = scH;
 objectNormal = gTerrNormal;
 `;
 
 const GLSL_VERTEX_BEGIN = /* glsl */ `
-vec3 transformed = vec3( position.x, gTerrY, position.z );
-vTerrWorld = vec3( gTerrXZ.x, gTerrY, gTerrXZ.y );
+vec3 transformed = vec3( position.x, gClipmapY, position.z );
+vTerrWorld = vec3( gClipmapXZ.x, gClipmapY, gClipmapXZ.y );
 vTerrNormal = gTerrNormal;
+`;
+
+// The shadow pass runs its own material, so it needs the same displacement or
+// the terrain would cast the shadow of a flat plane at y = 0.
+const GLSL_DEPTH_BEGIN = /* glsl */ `
+scClipmap( position );
+vec3 transformed = vec3( position.x, gClipmapY, position.z );
 `;
 
 const GLSL_FRAGMENT_PARS = /* glsl */ `
@@ -697,4 +709,24 @@ export function createTerrainMaterial(
       releaseTerrainFieldTexture(map);
     },
   };
+}
+
+/**
+ * The material three renders into the shadow map. It carries the same clipmap
+ * morph and the same height-field displacement as the beauty pass, so
+ * mountains shadow themselves correctly instead of projecting the shadow of a
+ * flat plane. Assigned to `Mesh.customDepthMaterial` by terrainMesh.ts; the
+ * caller owns disposing it.
+ */
+export function createTerrainDepthMaterial(map: MapDef, handle: TerrainMaterialHandle): THREE.MeshDepthMaterial {
+  const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  depth.name = `terrain.depth.${map.id}`;
+  depth.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, handle.uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", `#include <common>\n${GLSL_VERTEX_PARS}`)
+      .replace("#include <begin_vertex>", GLSL_DEPTH_BEGIN);
+  };
+  depth.customProgramCacheKey = (): string => "terrainDepth";
+  return depth;
 }

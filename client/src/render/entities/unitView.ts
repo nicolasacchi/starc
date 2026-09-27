@@ -23,8 +23,7 @@
  * standing units, so it collapses to a handful of draw calls, while the units
  * the player is actually watching keep their animation.
  *
-import type { MapDef, Race } from "@shared/protocol";
-import type { QualitySettings } from "@render/core/quality";
+ * ## No per-frame allocation
  * `update()` only writes numbers into existing objects. Limbs, weapons and
  * shadows are built once in the constructor; the shared cube, plane and shadow
  * texture live for the process and are released by
@@ -34,6 +33,7 @@ import * as THREE from "three";
 
 import type { MapDef, Race } from "@shared/protocol";
 import { attackOf, entityDef } from "@shared/gameData";
+import type { QualitySettings } from "@render/core/quality";
 import { materialFor } from "@render/materials/materialLibrary";
 import { unitGeometry } from "@render/geometry/unitGeometry";
 import { heightField } from "@render/terrain/heightfield";
@@ -66,6 +66,7 @@ interface Rig {
   wing: THREE.Object3D | null;
   shadow: THREE.Mesh | null;
   shadowHolder: THREE.Group;
+}
 
 /* ------------------------------------------------------------------ */
 /* Shared, process-lifetime assets                                     */
@@ -156,7 +157,6 @@ export class UnitView extends AbstractEntityView {
   private readonly recoilKick: number;
 
   private lastX = 0;
-  private lastY = 0;
   private lastZ = 0;
   private lastYaw = 0;
   private walkPhase = 0;
@@ -169,8 +169,7 @@ export class UnitView extends AbstractEntityView {
   constructor(options: EntityViewOptions, map: MapDef) {
     super(options);
     const def = entityDef(options.typeKey);
-    const race: Race = this.race;
-    const material = materialFor(def.key, race);
+    const material = materialFor(def.key, this.race);
     this.terrain = heightField(map);
     this.legStride = Math.max(0.5, this.radius * STRIDE_PER_RADIUS);
     // A stable per-entity phase stops a whole army bobbing in lockstep.
@@ -215,6 +214,7 @@ export class UnitView extends AbstractEntityView {
       const thickness = this.radius * (heavy ? 0.22 : 0.13);
       const barrel = new THREE.Mesh(cube(), material);
       barrel.scale.set(thickness, thickness, barrelLength);
+      barrel.position.set(this.radius * 0.45, this.height * 0.56, barrelLength * 0.5);
       barrel.castShadow = true;
       weapon.add(barrel);
       if (attack.weapon === "missile") {
@@ -274,13 +274,13 @@ export class UnitView extends AbstractEntityView {
    * unselected units beyond the LOD radius are cheap enough to batch.
    */
   setLod(cameraDistanceSq: number, lodDistanceSq: number): void {
-    const wantsBatch =
+    this.applyBatch(
       cameraDistanceSq > lodDistanceSq &&
-      !this.selected &&
-      this.hp >= this.hpMax &&
-      this.state === "idle" &&
-      this.visible;
-    this.applyBatch(wantsBatch);
+        !this.selected &&
+        this.hp >= this.hpMax &&
+        this.state === "idle" &&
+        this.visible,
+    );
   }
 
   /** Pulls a view back onto its rig, e.g. when its batch bucket is full. */
@@ -331,7 +331,6 @@ export class UnitView extends AbstractEntityView {
     const dz = pz - this.lastZ;
     const travelled = Math.hypot(dx, dz);
     this.lastX = px;
-    this.lastY = py;
     this.lastZ = pz;
     const speed = dt > 0 ? travelled / dt : 0;
     const moving = speed > MOVE_EPSILON;
@@ -409,7 +408,7 @@ export class UnitView extends AbstractEntityView {
       }
       if (this.rig.shadow !== null) {
         // The blob stays on the ground while the hull keeps its authoritative
-        // altitude; it spreads and fades as the unit climbs.
+        // altitude; it spreads as the unit climbs.
         const altitude = Math.max(0.5, py - groundY);
         this.rig.shadow.position.set(0, groundY - py + 0.08, 0);
         this.rig.shadow.scale.setScalar(this.radius * 5 * (1 + altitude * 0.05));
@@ -417,7 +416,7 @@ export class UnitView extends AbstractEntityView {
     }
   }
 
-  /** The shared HUD anchor is hidden when the unit is healthy and idle. */
+  /** The shared HUD anchor is hidden when the unit is healthy and unselected. */
   private refreshHudAnchor(): void {
     this.hudAnchor.visible = this.visible && (this.selected || this.hp < this.hpMax);
   }
@@ -427,21 +426,12 @@ export class UnitView extends AbstractEntityView {
     // material library, or the process-lifetime set released by
     // disposeUnitViewShared() — so teardown is just unlinking the children.
     this.group.clear();
-  private readonly capacity: number;
-  private readonly castShadows: boolean;
-  private disposed = false;
-
-  constructor(settings: QualitySettings, capacityPerType = 256) {
-    this.capacity = Math.max(32, capacityPerType);
-    // The cheap presets skip shadow casting for batched units: they are far
-    // away, and their shadows cost a whole extra pass over every bucket.
-    this.castShadows = settings.shadowMapSize > 0 && !settings.motionBlur;
-    this.group.name = "unit-batch";
-    this.group.frustumCulled = false;
   }
+}
+
+interface UnitBucket {
   mesh: THREE.InstancedMesh;
   count: number;
-  race: Race;
 }
 
 /**
@@ -458,13 +448,16 @@ export class UnitBatchRenderer {
   private readonly projection = new THREE.Matrix4();
   private readonly sphere = new THREE.Sphere();
   private readonly capacity: number;
+  private readonly castShadows: boolean;
   private disposed = false;
 
   constructor(settings: QualitySettings, capacityPerType = 256) {
     this.capacity = Math.max(32, capacityPerType);
+    // The cheap presets skip shadow casting for batched units: they are far
+    // away, and their shadows would cost a second pass over every bucket.
+    this.castShadows = settings.shadowMapSize > 0 && !settings.motionBlur;
     this.group.name = "unit-batch";
     this.group.frustumCulled = false;
-    void settings;
   }
 
   /** Starts a new frame; call before any {@link add}. */
@@ -477,7 +470,7 @@ export class UnitBatchRenderer {
 
   /**
    * Submits one batched unit. Returns false when the bucket is full, so the
-   * caller can put the unit back on its rig instead of dropping it.
+   * caller can put the unit back on its rig rather than dropping it.
    */
   add(view: UnitView): boolean {
     if (this.disposed) return false;
@@ -488,7 +481,7 @@ export class UnitBatchRenderer {
     // CPU frustum cull: a sphere test per instance is far cheaper than
     // drawing an off-screen unit, and it keeps the batch cheap at 300+.
     this.sphere.center.copy(p);
-    mesh.castShadow = this.castShadows;
+    this.sphere.radius = view.radius * 1.6 + view.height * 0.5;
     if (!this.frustum.intersectsSphere(this.sphere)) return true;
 
     const m = bucket.mesh.instanceMatrix.array as Float32Array;
@@ -530,20 +523,17 @@ export class UnitBatchRenderer {
     const key = view.typeKey;
     const existing = this.buckets.get(key);
     if (existing !== undefined) return existing;
-    const mesh = new THREE.InstancedMesh(
-      unitGeometry(key),
-      materialFor(key, view.race),
-      this.capacity,
-    );
+    const mesh = new THREE.InstancedMesh(unitGeometry(key), materialFor(key, view.race), this.capacity);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    mesh.castShadow = true;
+    mesh.castShadow = this.castShadows;
     mesh.receiveShadow = true;
     mesh.frustumCulled = false;
     mesh.count = 0;
     mesh.name = `batch:${key}`;
-    this.buckets.set(key, { mesh, count: 0, race: view.race });
+    const bucket: UnitBucket = { mesh, count: 0 };
+    this.buckets.set(key, bucket);
     this.group.add(mesh);
-    return this.buckets.get(key) ?? null;
+    return bucket;
   }
 
   dispose(): void {
@@ -551,8 +541,8 @@ export class UnitBatchRenderer {
     this.disposed = true;
     for (const bucket of this.buckets.values()) {
       this.group.remove(bucket.mesh);
-      // The geometry comes from the shared ref-counted cache and the material
-      // from the shared library; neither is owned by an instance mesh.
+      // The geometry belongs to the shared ref-counted cache and the material
+      // to the shared library; an InstancedMesh only owns its buffers.
       bucket.mesh.dispose();
     }
     this.buckets.clear();

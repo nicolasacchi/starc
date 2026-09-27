@@ -77,6 +77,7 @@ export class LobbyClient {
     this.ownsTransport = options.transport === undefined;
     this.transport = options.transport ?? new StompTransport();
     this.chatCooldownMs = options.chatCooldownMs ?? LOBBY_CHAT_COOLDOWN_MS;
+    this.matchId = options.matchId ?? null;
     this.transport.onMessage((msg) => this.onMessage(msg));
     this.transport.onStateChange((state) => {
       if (state === "connected") this.subscribe();
@@ -90,7 +91,7 @@ export class LobbyClient {
     return this.current;
   }
 
-  /** Match the caller believes it is seated in. */
+  /** Match this client is seated in; the default for the helpers above. */
   matchId: number | null;
 
   onState(handler: (state: LobbyState) => void): Unsubscribe {
@@ -138,21 +139,33 @@ export class LobbyClient {
     this.transport.send(message);
   }
 
-  leave(matchId: number): void {
-    this.transport.send({ v: PROTOCOL_VERSION, t: "lobby:leave", match_id: matchId });
+  /** Leaves the match, defaulting to the one this client is seated in. */
+  leave(matchId?: number): void {
+    const target = this.requireMatch(matchId);
+    if (target !== null) {
+      this.transport.send({ v: PROTOCOL_VERSION, t: "lobby:leave", match_id: target });
+    }
   }
 
-  ready(matchId: number, ready: boolean): void {
-    this.transport.send({ v: PROTOCOL_VERSION, t: "lobby:ready", match_id: matchId, ready });
+  ready(matchId?: number, ready = true): void {
+    const target = this.requireMatch(matchId);
+    if (target !== null) {
+      this.transport.send({ v: PROTOCOL_VERSION, t: "lobby:ready", match_id: target, ready });
+    }
   }
 
   /** Host only: the server refuses if every player is not ready. */
-  start(matchId: number): void {
-    this.transport.send({ v: PROTOCOL_VERSION, t: "lobby:start", match_id: matchId });
+  start(matchId?: number): void {
+    const target = this.requireMatch(matchId);
+    if (target !== null) {
+      this.transport.send({ v: PROTOCOL_VERSION, t: "lobby:start", match_id: target });
+    }
   }
 
   /** Rate limited locally to one line per {@link LOBBY_CHAT_COOLDOWN_MS}. */
-  chat(matchId: number, text: string): boolean {
+  chat(text: string, matchId?: number): boolean {
+    const target = this.requireMatch(matchId);
+    if (target === null) return false;
     const trimmed = text.slice(0, LOBBY_CHAT_MAX_LENGTH);
     if (trimmed.length === 0) return false;
     const now = Date.now();
@@ -161,13 +174,27 @@ export class LobbyClient {
       return false;
     }
     this.lastChatAtMs = now;
-    this.transport.send({ v: PROTOCOL_VERSION, t: "lobby:chat", match_id: matchId, text: trimmed });
+    this.transport.send({ v: PROTOCOL_VERSION, t: "lobby:chat", match_id: target, text: trimmed });
     return true;
   }
 
   /** Host only: change name, map, mode, seat count or password. */
-  settings(matchId: number, settings: LobbySettings): void {
-    this.transport.send({ v: PROTOCOL_VERSION, t: "lobby:settings", match_id: matchId, ...settings });
+  settings(settings: LobbySettings, matchId?: number): void {
+    const target = this.requireMatch(matchId);
+    if (target !== null) {
+      this.transport.send({ v: PROTOCOL_VERSION, t: "lobby:settings", match_id: target, ...settings });
+    }
+  }
+
+  /** Resolves the target match, or reports that there is none. */
+  private requireMatch(matchId?: number): number | null {
+    const target = matchId ?? this.matchId;
+    if (target === null) {
+      this.events.emit("error", { code: "no_match", message: "no match selected", fatal: false });
+      return null;
+    }
+    this.matchId = target;
+    return target;
   }
 
   /** Leaves the lobby channel; the transport itself is left alone. */

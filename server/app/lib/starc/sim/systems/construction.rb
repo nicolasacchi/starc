@@ -32,7 +32,8 @@ module Starc
           end
           return unless completed
 
-          # The worker that placed it is free again.
+          # The worker that placed it is free again. A worker whose building
+          # was destroyed instead is released in the damage phase.
           j = 0
           while j < world.living.size
             w = world.living[j]
@@ -40,7 +41,7 @@ module Starc
             next unless w.construct_id.positive?
 
             b = world.entity(w.construct_id)
-            next if b && b.alive?
+            next if b.nil? || !b.alive? || !b.complete?
 
             w.construct_id = 0
             w.state = "idle" if w.state == "building"

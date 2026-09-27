@@ -74,12 +74,12 @@ module ApplicationCable
       player
     end
 
-    # A fatal error ends the conversation: the client is told why, the
-    # subscription is never confirmed and the channel stops receiving.
+    # A fatal error ends the current exchange: the client is told why and is
+    # expected to leave. The subscription itself is left alone — rejecting it
+    # also deafens the channel to every later message, and a client that can
+    # recover (identify, rejoin) has to be able to.
     def terminate!(code, message)
       transmit_error(code, message, fatal: true)
-      reject
-      stop_all_streams
       nil
     end
   end

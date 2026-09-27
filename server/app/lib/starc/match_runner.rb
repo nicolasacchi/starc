@@ -434,10 +434,10 @@ module Starc
           kills: stat(state, "kills"),
           deaths: stat(state, "deaths"),
           resources_mined: stat(state, "resources_mined"),
-          units_built: stat(state, "units_built"),
-          army_value: stat(state, "army_value")
+          units_built: stat(state, "units_built")
         }
-        seat.update!(stats.merge(result: result))
+        seat.update!(stats.merge(result: result, army_value: stat(state, "army_value")))
+        # `Player` keeps no army_value, so the career totals take the rest.
         seat.player&.record_result!(result: result, **stats)
       rescue StandardError => e
         log_error("result for player #{seat.player_id}", e)

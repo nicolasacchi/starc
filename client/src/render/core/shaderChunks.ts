@@ -354,8 +354,8 @@ export function injectShaderChunks(material: THREE.Material, options: ShaderChun
   const previousKey = material.customProgramCacheKey?.();
   const keySuffix = `sc${panel ? "p" : ""}${fresnel ? "f" : ""}${emissive ? "e" : ""}${detail ? "d" : ""}`;
 
-  material.onBeforeCompile = (shader) => {
-    previous?.call(material, shader as never);
+  material.onBeforeCompile = (shader, renderer) => {
+    previous?.call(material, shader as never, renderer);
     for (const [name, uniform] of Object.entries(uniforms)) shader.uniforms[name] = uniform;
 
     const declarations: string[] = [`uniform float ${U_CHUNK_STRENGTH};`, `uniform float ${U_CHUNK_SCALE};`];

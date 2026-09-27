@@ -399,14 +399,14 @@ export class PostFXPipeline {
       // falls back to the shader's luminance occlusion.
       if (this.depthOcclusion) {
         this.renderer.setRenderTarget(this.depthTarget);
-        this.renderer.clear(true, true, false);
+        this.renderer.clear(false, true, false);
         this.renderer.render(this.scene, this.camera);
         this.renderer.setRenderTarget(null);
       }
       this.godRays.uniforms.uTime.value = this.elapsed;
     }
     if (this.composite) this.composite.uniforms.uTime.value = this.elapsed;
-    composer.render();
+    composer.render(this.elapsed);
   }
 
   dispose(): void {

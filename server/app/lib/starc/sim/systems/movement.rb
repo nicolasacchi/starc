@@ -25,6 +25,10 @@ module Starc
         # Two units closer than this to each other both get pushed, so
         # separation converges instead of oscillating.
         HALF_STEP = 0.5
+        # Overlaps smaller than this are left alone. Without a deadband a
+        # crowded fight spends the whole tick nudging units by fractions of a
+        # millimetre, which is invisible and expensive.
+        MIN_SEPARATION_PUSH = 0.01
         # Deterministic nudge for two units that occupy the exact same point,
         # which would otherwise divide by zero.
         OVERLAP_JITTER = 0.7
@@ -233,6 +237,8 @@ module Starc
           end
           d = Math.sqrt(d2)
           push = (min - d) * HALF_STEP
+          return if push < MIN_SEPARATION_PUSH
+
           ux = dx / d
           uz = dz / d
           place(world, a, a.x - (ux * push), a.z - (uz * push))
@@ -240,9 +246,8 @@ module Starc
         end
 
         def self.push_out_of_building(world, e, b)
-          if e.is_air
-            return
-          end
+          return if e.is_air
+
           min = e.radius + b.radius
           dx = e.x - b.x
           dz = e.z - b.z
@@ -257,6 +262,8 @@ module Starc
           end
           d = Math.sqrt(d2)
           push = min - d
+          return if push < MIN_SEPARATION_PUSH
+
           place(world, e, e.x + ((dx / d) * push), e.z + ((dz / d) * push))
         end
       end

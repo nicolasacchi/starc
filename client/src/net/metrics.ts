@@ -92,7 +92,7 @@ class Ring {
     return this.filled === 0 ? 0 : this.sum / this.filled;
   }
 
-  sum(): number {
+  total(): number {
     return this.sum;
   }
 
@@ -282,7 +282,7 @@ export class NetMetrics {
   /** Builds the report. `nowMs` drives the packets-per-second window. */
   snapshot(nowMs: number = Date.now()): MetricsReport {
     const frames = this.frameMs.count;
-    const frameSpanMs = this.frameMs.sum();
+    const frameSpanMs = this.frameMs.total();
     const packetsLastSecond = this.inboundPackets.countAtOrAbove(nowMs - 1000);
     return {
       rttMs: this.rtt.mean(),
@@ -295,7 +295,7 @@ export class NetMetrics {
       snapshotBytes: this.snapshotBytes.mean(),
       interpolationDelayMs: this.interpolationDelay.mean(),
       predictionErrorM: this.predictionError.mean(),
-      droppedFrames: frames > 0 ? this.droppedFrames.sum() / frames : 0,
+      droppedFrames: frames > 0 ? this.droppedFrames.total() / frames : 0,
       framesPerSecond: frameSpanMs > 0 ? (frames * 1000) / frameSpanMs : 0,
       samples: this.rtt.count,
       totals: {

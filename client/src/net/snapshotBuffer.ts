@@ -91,7 +91,7 @@ export class SnapshotBuffer {
    */
   push(snapshot: Snapshot, receivedAtMs: number = Date.now()): BufferedSnapshot {
     const tick = snapshot.tick;
-    const newest = this.newest();
+    const newest = this.latest();
     if (newest) {
       if (newest.tick === tick) this.duplicates++;
       else if (newest.tick > tick) this.outOfOrder++;

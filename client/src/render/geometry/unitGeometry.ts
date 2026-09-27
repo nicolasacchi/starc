@@ -6,34 +6,32 @@
  * BufferGeometry, tuned for silhouette-first readability at RTS zoom: a
  * Marine is a compact humanoid with a rifle, a Siege Tank is a hull + turret +
  * barrel, a Zergling is a low quadruped, a Battlecruiser is a big flying hull.
- * Nothing about the shape comes from a hard-coded stat — the footprint comes
- * from `size.radius` / `size.height` in shared/game-data.json, and
+ * Nothing about the shape is hard-coded from a stat — the footprint comes from
+ * `size.radius` / `size.height` in shared/game-data.json, and
  * `movement === "air"` decides whether the model hovers and gets a shadow
  * decal.
  *
- * Conventions (enforced by `fitFootprint` and the self-check below):
+ * Conventions (enforced by `fitFootprint` and `selfCheckGeometryCoverage`):
  *  - origin at the base centre, y = 0 is the ground contact plane;
  *  - the model faces +Z;
- *  - horizontal extent stays inside the collision radius, and the silhouette
+ *  - horizontal extent stays inside the collision radius and the silhouette
  *    tops out at the roster height, so what you see is what the server blocks.
  *
  * This module and `buildingGeometry.ts` reference each other: each is the
  * other's fallback for a key of the wrong kind, so neither entry point throws
- * for any of the 57 roster keys. Both only call each other at build time,
+ * for any of the 57 roster keys. They only call each other at build time,
  * after both modules have finished evaluating.
  */
 import * as THREE from "three";
 import { GAME, entityDef } from "@shared/gameData";
-import type { Race, UnitDef } from "@shared/protocol";
-import { TONES, raceOfEntity } from "@render/materials/palette";
+import type { UnitDef } from "@shared/protocol";
+import { TONES } from "@render/materials/palette";
 import {
   PartList,
-  beveledBox,
   capsule,
   chamferedCylinder,
   cone,
   fitFootprint,
-  greeble,
   hexPrism,
   mergeGroups,
   mulberry32,
@@ -55,10 +53,11 @@ export const AIR_BODY_GROUP = 0;
 /** Material group holding the ground shadow decal of an air unit. */
 export const AIR_SHADOW_GROUP = 1;
 
+/** Horns, spines and gun muzzles that point forward and slightly up. */
+const FORWARD_TILT = 1.27;
+
 interface Build {
   def: UnitDef;
-  key: string;
-  race: Race;
   /** Collision radius in metres; the visual is fitted to it. */
   radius: number;
   /** Silhouette height in metres. */
@@ -78,11 +77,10 @@ function legs(b: Build, top: number, spread: number, width: number, depth: numbe
   const thigh = top * 0.56;
   for (const side of [1, -1]) {
     b.parts.add(taperedBox(width, thigh, depth, 0.85), TONES.dark, { x: side * spread });
-    b.parts.add(
-      taperedBox(width * 1.12, top - thigh * 0.9, depth * 1.08, 0.9),
-      TONES.plate,
-      { x: side * spread * 0.94, y: thigh * 0.9 },
-    );
+    b.parts.add(taperedBox(width * 1.12, top - thigh * 0.9, depth * 1.08, 0.9), TONES.plate, {
+      x: side * spread * 0.94,
+      y: thigh * 0.9,
+    });
     b.parts.add(taperedBox(width * 1.6, top * 0.13, depth * 2, 0.85), TONES.deep, {
       x: side * spread * 0.94,
       z: depth * 0.4,
@@ -160,10 +158,13 @@ function head(b: Build, y: number, size: number, style: HeadStyle): void {
   }
 }
 
-/** Shoulders and upper arms, hanging slightly forward. */
+/**
+ * Shoulders and arms hanging from `shoulderY`, angled forward when `forward`
+ * is set so the model reads as holding something out in front.
+ */
 function arms(
   b: Build,
-  y: number,
+  shoulderY: number,
   span: number,
   length: number,
   width: number,
@@ -173,20 +174,24 @@ function arms(
   for (const side of [1, -1]) {
     b.parts.add(taperedBox(width, length, width, 0.8), tone, {
       x: side * span,
-      y,
+      y: shoulderY - length,
       z: forward,
-      rx: forward > 0 ? -0.5 : 0,
+      rx: forward > 0 ? 0.5 : 0.08,
     });
-    b.parts.add(taperedBox(width * 0.9, length * 0.45, width * 0.9, 0.9), TONES.dark, {
-      x: side * span,
-      y: y - length * 0.5,
-      z: forward + (forward > 0 ? length * 0.3 : 0),
+    b.parts.add(taperedBox(width * 0.95, length * 0.5, width * 0.95, 0.9), TONES.dark, {
+      x: side * span * 1.05,
+      y: shoulderY - length * 1.5,
+      z: forward * 1.6,
     });
   }
 }
 
 type WeaponStyle = "rifle" | "shotgun" | "cannon" | "blade" | "staff" | "claw" | "none";
 
+/**
+ * Mounts a weapon at (x, y, z) pointing down +Z. `len` is the total forward
+ * reach, so callers can keep barrels inside the collision radius.
+ */
 function weapon(
   b: Build,
   style: WeaponStyle,
@@ -194,11 +199,7 @@ function weapon(
 ): void {
   switch (style) {
     case "rifle":
-      b.parts.add(taperedBox(o.r * 1.5, o.r * 1.5, o.len * 0.55, 0.9), TONES.deep, {
-        x: o.x,
-        y: o.y,
-        z: o.z,
-      });
+      b.parts.add(taperedBox(o.r * 1.5, o.r * 1.5, o.len * 0.55, 0.9), TONES.deep, { x: o.x, y: o.y, z: o.z });
       b.parts.add(chamferedCylinder(o.r * 0.42, o.r * 0.42, o.len * 0.6, 6), TONES.dark, {
         x: o.x,
         y: o.y + o.r * 0.3,
@@ -212,11 +213,7 @@ function weapon(
       });
       break;
     case "shotgun":
-      b.parts.add(taperedBox(o.r * 1.8, o.r * 1.5, o.len * 0.5, 0.9), TONES.deep, {
-        x: o.x,
-        y: o.y,
-        z: o.z,
-      });
+      b.parts.add(taperedBox(o.r * 1.8, o.r * 1.5, o.len * 0.5, 0.9), TONES.deep, { x: o.x, y: o.y, z: o.z });
       for (const side of [1, -1]) {
         b.parts.add(chamferedCylinder(o.r * 0.4, o.r * 0.4, o.len * 0.65, 6), TONES.dark, {
           x: o.x + side * o.r * 0.5,
@@ -232,16 +229,16 @@ function weapon(
         y: o.y,
         z: o.z,
       });
-      b.parts.add(chamferedCylinder(o.r * 0.7, o.r * 0.8, o.len, 8), TONES.dark, {
+      b.parts.add(chamferedCylinder(o.r * 0.7, o.r * 0.8, o.len * 0.75, 8), TONES.dark, {
         x: o.x,
         y: o.y,
-        z: o.z + o.len * 0.4,
+        z: o.z + o.len * 0.35,
         rx: Math.PI * 0.5,
       });
-      b.parts.add(chamferedCylinder(o.r * 0.95, o.r * 0.95, o.r * 0.5, 8), TONES.accent, {
+      b.parts.add(chamferedCylinder(o.r * 1.35, o.r * 1.35, o.r * 0.7, 8), TONES.accent, {
         x: o.x,
         y: o.y,
-        z: o.z + o.len * 1.25,
+        z: o.z + o.len,
         rx: Math.PI * 0.5,
       });
       break;
@@ -251,21 +248,17 @@ function weapon(
         y: o.y,
         z: o.z,
       });
-      b.parts.add(taperedBox(o.r * 0.7, o.r * 0.7, o.r * 0.7, 1), TONES.trim, {
+      b.parts.add(taperedBox(o.r * 0.7, o.r * 0.7, o.r * 0.7, 1), TONES.trim, { x: o.x, y: o.y, z: o.z });
+      break;
+    case "staff":
+      b.parts.add(chamferedCylinder(o.r * 0.28, o.r * 0.28, o.len * 0.9, 6), TONES.deep, {
         x: o.x,
         y: o.y,
         z: o.z,
       });
-      break;
-    case "staff":
-      b.parts.add(chamferedCylinder(o.r * 0.28, o.r * 0.28, o.len, 6), TONES.deep, {
-        x: o.x,
-        y: o.y - o.len * 0.5,
-        z: o.z,
-      });
       b.parts.add(sphereLowPoly(o.r * 0.85, 8, 5), TONES.energy, {
         x: o.x,
-        y: y0(o.y, o.len),
+        y: o.y + o.len * 0.9,
         z: o.z,
       });
       break;
@@ -275,7 +268,7 @@ function weapon(
           x: o.x + side * o.r * 0.6,
           y: o.y,
           z: o.z,
-          rx: Math.PI * 0.5,
+          rx: FORWARD_TILT,
           ry: side * 0.2,
         });
       }
@@ -285,47 +278,40 @@ function weapon(
   }
 }
 
-function y0(y: number, len: number): number {
-  return y + len * 0.5;
-}
-
 /** Shoulder pads — the angular Protoss read. */
 function pauldron(b: Build, y: number, x: number, size: number): void {
   for (const side of [1, -1]) {
-    b.parts.add(truncatedPyramid(size * 1.2, size * 1.6, size * 0.5, size * 0.9, size * 0.9), TONES.accent, {
-      x: side * x,
-      y,
-    });
+    b.parts.add(
+      truncatedPyramid(size * 1.2, size * 1.6, size * 0.5, size * 0.9, size * 0.9),
+      TONES.accent,
+      { x: side * x, y },
+    );
   }
 }
 
-/** Ring of jointed insect legs, splayed outward and up. */
-function insectLegs(
-  b: Build,
-  count: number,
-  ring: number,
-  y: number,
-  len: number,
-  w: number,
-  tone: PartTone = TONES.dark,
-): void {
+/**
+ * Ring of jointed insect legs. Each leg is one segment running from the
+ * ground at `ring` up to the body at height `y`, so the horizontal footprint
+ * is exactly `ring` whatever the unit's height.
+ */
+function insectLegs(b: Build, count: number, ring: number, y: number, w: number): void {
+  const rise = Math.max(y, 1e-3);
+  const run = ring * 0.5;
+  const length = Math.hypot(run, rise);
+  const tilt = Math.atan2(run, rise);
   for (let i = 0; i < count; i++) {
     const a = (i / count) * Math.PI * 2 + Math.PI * 0.25;
     const cx = Math.cos(a);
     const cz = Math.sin(a);
-    b.parts.add(taperedBox(w, len, w, 0.5), tone, {
-      x: cx * ring * 0.55,
-      y: y - len * 0.55,
-      z: cz * ring * 0.55,
-      rx: cz * 0.5,
-      rz: -cx * 0.5,
-    });
-    b.parts.add(taperedBox(w * 0.8, len * 0.55, w * 0.8, 0.4), TONES.deep, {
+    b.parts.add(taperedBox(w, length, w, 0.45), TONES.dark, {
       x: cx * ring,
-      y: 0,
       z: cz * ring,
-      rx: cz * 0.9,
-      rz: -cx * 0.9,
+      rx: cz * tilt,
+      rz: -cx * tilt,
+    });
+    b.parts.add(taperedBox(w * 1.2, w * 0.8, w * 1.2, 0.8), TONES.deep, {
+      x: cx * ring,
+      z: cz * ring,
     });
   }
 }
@@ -336,22 +322,13 @@ function carapace(b: Build, y: number, r: number, h: number, tone: PartTone = TO
 }
 
 /** Ring of chitin spikes around a carapace — the Zerg silhouette. */
-function spines(
-  b: Build,
-  count: number,
-  ring: number,
-  y: number,
-  len: number,
-  w: number,
-  seed: number,
-): void {
+function spines(b: Build, count: number, ring: number, y: number, len: number, w: number, seed: number): void {
   const rnd = mulberry32(seed);
   for (let i = 0; i < count; i++) {
     const a = (i / count) * Math.PI * 2;
     const cx = Math.cos(a);
     const cz = Math.sin(a);
-    const length = len * (0.65 + rnd() * 0.6);
-    b.parts.add(cone(w, length, 5), TONES.trim, {
+    b.parts.add(cone(w, len * (0.65 + rnd() * 0.6), 5), TONES.trim, {
       x: cx * ring,
       y,
       z: cz * ring,
@@ -361,71 +338,43 @@ function spines(
   }
 }
 
-function wings(
-  b: Build,
-  span: number,
-  chord: number,
-  y: number,
-  z: number,
-  x: number,
-  tilt: number,
-  tone: PartTone = TONES.plate,
-): void {
+function wings(b: Build, span: number, chord: number, y: number, x: number, tilt: number, tone: PartTone = TONES.plate): void {
   for (const side of [1, -1]) {
     b.parts.add(wingShape(span, chord, chord * 0.16), tone, {
       x: side * x,
       y,
-      z,
       ry: side > 0 ? -0.25 : Math.PI + 0.25,
       rz: side * tilt,
     });
   }
 }
 
-/** Engine pod with a hot intake, used at the back of every air hull. */
-function nacelles(
-  b: Build,
-  count: number,
-  spread: number,
-  y: number,
-  z: number,
-  r: number,
-  len: number,
-): void {
+/**
+ * Engine pods. `z` is the rear face, so pods hang off the back of a hull and
+ * their hot intakes face away from the nose.
+ */
+function nacelles(b: Build, count: number, spread: number, y: number, z: number, r: number, len: number): void {
   for (let i = 0; i < count; i++) {
-    const spread2 = count === 1 ? 0 : (i / (count - 1) - 0.5) * 2 * spread;
-    for (const side of count === 1 ? [1] : [1, -1]) {
-      if (count > 2 && i % 2 === 1) continue;
-      const x = count === 1 ? 0 : side * spread2;
-      b.parts.add(taperedBox(r * 2.4, r * 2, len, 0.7), TONES.plate, { x, y, z });
-      b.parts.add(chamferedCylinder(r * 0.9, r * 0.75, r * 0.5, 8), TONES.energy, {
-        x,
-        y: y + r * 0.75,
-        z: z - len * 0.15,
-      });
-    }
+    if (count > 2 && i % 2 === 1) continue;
+    const x = count === 1 ? 0 : (count === 2 ? (i === 0 ? -1 : 1) : 0) * spread * (i < count / 2 ? -1 : 1);
+    b.parts.add(taperedBox(r * 2.4, r * 2, len, 0.7), TONES.plate, { x, y, z: z + len });
+    b.parts.add(chamferedCylinder(r * 0.9, r * 0.75, r * 0.5, 8), TONES.energy, {
+      x,
+      y: y + r * 0.75,
+      z: z + len * 0.15,
+    });
   }
 }
 
 /** Tracked hull: treads on both flanks, bevelled body on top. */
 function trackedHull(b: Build, w: number, h: number, d: number, treads: number): void {
-  b.parts.add(treadedBlock(w, h, d, treads), TONES.hull, { y: h * 0.06 });
-  b.parts.add(panelLineOverlay(w * 0.8, h * 0.06, d * 0.7, { lines: 2, thickness: 0.035 }), TONES.plate, {
-    y: h * 1.0,
-  });
+  b.parts.add(treadedBlock(w, h, d, treads), TONES.hull, { y: h * 0.08 });
+  b.parts.add(panelLineOverlay(w * 0.8, 0, d * 0.7, { lines: 2, thickness: 0.035 }), TONES.plate, { y: h });
 }
 
 /** Turret ring, housing and barrel(s) aimed down +Z. */
-function turret(
-  b: Build,
-  y: number,
-  r: number,
-  h: number,
-  barrel: number,
-  len: number,
-  barrels = 1,
-): void {
-  b.parts.add(hexPrism(r, h * 0.5, ), TONES.deep, { y });
+function turret(b: Build, y: number, r: number, h: number, barrel: number, len: number, barrels = 1): void {
+  b.parts.add(hexPrism(r, h * 0.5), TONES.deep, { y });
   b.parts.add(taperedBox(r * 2, h * 0.5, r * 1.7, 0.75), TONES.hull, { y: y + h * 0.5 });
   for (let i = 0; i < barrels; i++) {
     const off = barrels === 1 ? 0 : (i / (barrels - 1) - 0.5) * r * 1.1;
@@ -461,30 +410,30 @@ function cockpit(b: Build, y: number, w: number, h: number, d: number): void {
 const probe: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  torsoBox(b, h * 0.42, h * 0.3, r * 1.5, r * 1.3, 0.75, TONES.hull);
-  b.parts.add(taperedBox(r * 1.2, h * 0.12, r * 1.1, 0.6), TONES.accent, { y: h * 0.7 });
-  head(b, h * 0.76, r * 0.4, "gem");
+  torsoBox(b, h * 0.42, h * 0.3, r * 1.5, r * 1.3, 0.75);
+  torsoBox(b, h * 0.7, h * 0.12, r * 1.2, r * 1.1, 0.6, TONES.accent);
+  head(b, h * 0.6, r * 0.4, "gem");
   for (let i = 0; i < 4; i++) {
     const a = Math.PI * 0.25 + (i / 4) * Math.PI * 2;
-    const cx = Math.cos(a) * r * 0.5;
-    const cz = Math.sin(a) * r * 0.5;
-    b.parts.add(taperedBox(r * 0.2, h * 0.5, r * 0.2, 0.4), TONES.plate, {
+    const cx = Math.cos(a) * r * 0.45;
+    const cz = Math.sin(a) * r * 0.45;
+    b.parts.add(taperedBox(r * 0.18, h * 0.5, r * 0.18, 0.4), TONES.plate, {
       x: cx,
       z: cz,
-      rz: -cx * 0.9,
-      rx: cz * 0.9,
+      rz: -Math.cos(a) * 0.3,
+      rx: Math.sin(a) * 0.3,
     });
   }
   for (const side of [1, -1]) {
-    b.parts.add(taperedBox(r * 0.28, r * 0.28, r * 0.8, 0.6), TONES.plate, {
-      x: side * r * 0.7,
+    b.parts.add(taperedBox(r * 0.26, r * 0.26, r * 0.6, 0.6), TONES.plate, {
+      x: side * r * 0.62,
       y: h * 0.5,
-      z: r * 0.3,
+      z: r * 0.25,
     });
-    b.parts.add(chamferedCylinder(r * 0.16, r * 0.2, r * 0.4, 6), TONES.energy, {
-      x: side * r * 0.7,
+    b.parts.add(chamferedCylinder(r * 0.14, r * 0.18, r * 0.35, 6), TONES.energy, {
+      x: side * r * 0.62,
       y: h * 0.5,
-      z: r * 0.7,
+      z: r * 0.5,
       rx: Math.PI * 0.5,
     });
   }
@@ -496,20 +445,14 @@ const zealot: UnitBuilder = (b) => {
   legs(b, h * 0.44, r * 0.3, r * 0.34, r * 0.4);
   torsoBox(b, h * 0.42, h * 0.4, r * 1.35, r * 0.9, 0.78);
   torsoBox(b, h * 0.74, h * 0.1, r * 1.1, r * 0.8, 1, TONES.accent);
-  head(b, h * 0.82, r * 0.36, "crest");
-  pauldron(b, h * 0.78, r * 0.78, r * 0.42);
+  head(b, h * 0.82, r * 0.34, "crest");
+  pauldron(b, h * 0.78, r * 0.72, r * 0.4);
   for (const side of [1, -1]) {
-    b.parts.add(taperedBox(r * 0.3, h * 0.3, r * 0.3, 0.6), TONES.plate, {
-      x: side * r * 0.8,
+    b.parts.add(taperedBox(r * 0.28, h * 0.3, r * 0.28, 0.6), TONES.plate, {
+      x: side * r * 0.72,
       y: h * 0.45,
     });
-    weapon(b, "blade", {
-      x: side * r * 0.86,
-      y: h * 0.5,
-      z: r * 0.35,
-      len: r * 1.15,
-      r,
-    });
+    weapon(b, "blade", { x: side * r * 0.8, y: h * 0.5, z: r * 0.3, len: r * 1.1, r });
   }
 };
 
@@ -518,35 +461,25 @@ const stalker: UnitBuilder = (b) => {
   const h = b.height;
   legs(b, h * 0.5, r * 0.26, r * 0.26, r * 0.32);
   torsoBox(b, h * 0.48, h * 0.34, r * 0.9, r * 0.7, 0.7);
-  head(b, h * 0.8, r * 0.32, "visor");
-  pauldron(b, h * 0.76, r * 0.6, r * 0.3);
-  b.parts.add(taperedBox(r * 0.7, h * 0.3, r * 0.5, 0.6), TONES.trim, { y: h * 0.36, z: -r * 0.35 });
-  arms(b, h * 0.6, r * 0.5, h * 0.26, r * 0.22, r * 0.15);
-  weapon(b, "rifle", { x: 0, y: h * 0.6, z: r * 0.35, len: r * 1.1, r });
+  head(b, h * 0.8, r * 0.3, "visor");
+  pauldron(b, h * 0.76, r * 0.56, r * 0.28);
+  b.parts.add(taperedBox(r * 0.66, h * 0.3, r * 0.46, 0.6), TONES.trim, { y: h * 0.36, z: -r * 0.32 });
+  arms(b, h * 0.74, r * 0.48, h * 0.24, r * 0.2, r * 0.12);
+  weapon(b, "rifle", { x: 0, y: h * 0.58, z: r * 0.32, len: r * 0.55, r });
 };
 
 const sentry: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  for (let i = 0; i < 3; i++) {
-    const a = (i / 3) * Math.PI * 2;
-    const cx = Math.cos(a);
-    const cz = Math.sin(a);
-    b.parts.add(taperedBox(r * 0.22, h * 0.62, r * 0.22, 0.5), TONES.dark, {
-      x: cx * r * 0.4,
-      z: cz * r * 0.4,
-      rz: -cx * 0.35,
-      rx: cz * 0.35,
-    });
-  }
+  insectLegs(b, 3, r * 0.6, h * 0.55, r * 0.14);
   torsoBox(b, h * 0.6, h * 0.26, r * 1.1, r * 0.9, 0.8);
-  glowCore(b, h * 0.86, r * 0.55);
-  b.parts.add(torusSegment(r * 0.62, r * 0.1, Math.PI * 2, 14, 6), TONES.accent, { y: h * 0.84 });
+  glowCore(b, h * 0.84, r * 0.5);
+  b.parts.add(torusSegment(r * 0.55, r * 0.1, Math.PI * 2, 14, 6), TONES.accent, { y: h * 0.7 });
   for (const side of [1, -1]) {
-    b.parts.add(taperedBox(r * 0.18, r * 0.18, r * 1.1, 0.4), TONES.trim, {
-      x: side * r * 0.5,
-      y: h * 0.72,
-      z: r * 0.5,
+    b.parts.add(taperedBox(r * 0.16, r * 0.16, r * 0.9, 0.4), TONES.trim, {
+      x: side * r * 0.45,
+      y: h * 0.66,
+      z: r * 0.35,
       rx: -0.3,
     });
   }
@@ -555,57 +488,57 @@ const sentry: UnitBuilder = (b) => {
 const highTemplar: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  b.parts.add(cone(r * 1.15, h * 0.5, 8), TONES.dark);
-  torsoBox(b, h * 0.44, h * 0.36, r * 1.1, r * 0.85, 0.85);
-  torsoBox(b, h * 0.74, h * 0.08, r * 0.9, r * 0.7, 1, TONES.accent);
-  head(b, h * 0.8, r * 0.34, "hood");
-  arms(b, h * 0.62, r * 0.62, h * 0.24, r * 0.22, r * 0.1);
-  weapon(b, "staff", { x: r * 0.6, y: h * 0.34, z: r * 0.3, len: h * 0.55, r });
-  glowCore(b, h * 0.5, r * 0.3, TONES.energyDim);
+  b.parts.add(cone(r * 1.05, h * 0.5, 8), TONES.dark);
+  torsoBox(b, h * 0.44, h * 0.36, r * 1.05, r * 0.8, 0.85);
+  torsoBox(b, h * 0.74, h * 0.08, r * 0.85, r * 0.66, 1, TONES.accent);
+  head(b, h * 0.78, r * 0.32, "hood");
+  arms(b, h * 0.74, r * 0.56, h * 0.22, r * 0.2, r * 0.08);
+  weapon(b, "staff", { x: r * 0.55, y: h * 0.2, z: r * 0.3, len: h * 0.5, r });
+  glowCore(b, h * 0.46, r * 0.26, TONES.energyDim);
 };
 
 const darkTemplar: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  b.parts.add(cone(r * 1.1, h * 0.46, 8), TONES.deep);
-  torsoBox(b, h * 0.4, h * 0.38, r * 1.05, r * 0.8, 0.85, TONES.dark);
-  head(b, h * 0.78, r * 0.33, "hood");
-  arms(b, h * 0.6, r * 0.58, h * 0.26, r * 0.2, r * 0.12, TONES.deep);
-  weapon(b, "blade", { x: r * 0.6, y: h * 0.48, z: r * 0.3, len: r * 1.05, r });
-  glowCore(b, h * 0.55, r * 0.42);
+  b.parts.add(cone(r * 1.0, h * 0.46, 8), TONES.deep);
+  torsoBox(b, h * 0.4, h * 0.38, r * 1.0, r * 0.76, 0.85, TONES.dark);
+  head(b, h * 0.76, r * 0.31, "hood");
+  arms(b, h * 0.72, r * 0.52, h * 0.24, r * 0.18, r * 0.1, TONES.deep);
+  weapon(b, "blade", { x: r * 0.55, y: h * 0.44, z: r * 0.3, len: r * 0.95, r });
+  glowCore(b, h * 0.52, r * 0.36);
 };
 
 const adept: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
   legs(b, h * 0.4, r * 0.3, r * 0.3, r * 0.36);
-  torsoBox(b, h * 0.38, h * 0.32, r * 1.0, r * 0.75, 0.7);
-  head(b, h * 0.7, r * 0.3, "visor");
-  torsoBox(b, h * 0.66, h * 0.1, r * 0.8, r * 0.6, 1, TONES.accent);
-  b.parts.add(taperedBox(r * 0.2, h * 0.34, r * 0.2, 0.6), TONES.plate, {
-    x: r * 0.55,
-    y: h * 0.36,
+  torsoBox(b, h * 0.38, h * 0.32, r * 0.98, r * 0.72, 0.7);
+  torsoBox(b, h * 0.66, h * 0.1, r * 0.78, r * 0.58, 1, TONES.accent);
+  head(b, h * 0.7, r * 0.28, "visor");
+  b.parts.add(taperedBox(r * 0.2, h * 0.32, r * 0.2, 0.6), TONES.plate, {
+    x: r * 0.5,
+    y: h * 0.3,
     rx: -0.4,
   });
-  weapon(b, "blade", { x: r * 0.62, y: h * 0.52, z: r * 0.25, len: r * 0.85, r });
-  glowCore(b, h * 0.44, r * 0.28, TONES.energyDim);
+  weapon(b, "blade", { x: r * 0.56, y: h * 0.46, z: r * 0.24, len: r * 0.8, r });
+  glowCore(b, h * 0.4, r * 0.24, TONES.energyDim);
 };
 
 const archon: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  legs(b, h * 0.42, r * 0.34, r * 0.36, r * 0.44);
+  legs(b, h * 0.42, r * 0.32, r * 0.34, r * 0.42);
   torsoBox(b, h * 0.4, h * 0.34, r * 1.5, r * 1.1, 0.85, TONES.energyDim);
-  glowCore(b, h * 0.58, r * 0.45);
   torsoBox(b, h * 0.72, h * 0.12, r * 1.1, r * 0.8, 0.8, TONES.trim);
-  head(b, h * 0.8, r * 0.3, "gem");
+  glowCore(b, h * 0.56, r * 0.42);
+  head(b, h * 0.78, r * 0.28, "gem");
   for (const side of [1, -1]) {
-    b.parts.add(taperedBox(r * 0.44, h * 0.42, r * 0.44, 0.6), TONES.energyDim, {
-      x: side * r * 0.85,
+    b.parts.add(taperedBox(r * 0.42, h * 0.42, r * 0.42, 0.6), TONES.energyDim, {
+      x: side * r * 0.8,
       y: h * 0.42,
     });
     b.parts.add(taperedBox(r * 0.5, r * 0.5, r * 0.5, 0.8), TONES.trim, {
-      x: side * r * 0.9,
+      x: side * r * 0.84,
       y: h * 0.34,
     });
   }
@@ -617,51 +550,55 @@ const carrier: UnitBuilder = (b) => {
   b.parts.add(taperedBox(r * 1.1, h * 0.16, r * 1.7, 0.85), TONES.hull, { y: h * 0.2 });
   torsoBox(b, h * 0.34, h * 0.18, r * 0.7, r * 0.9, 0.8, TONES.plate);
   cockpit(b, h * 0.5, r * 0.5, h * 0.08, r * 0.4);
-  b.parts.add(cone(r * 0.5, h * 0.22, 6, r * 0.16), TONES.hull, { y: h * 0.2, z: r * 0.95, rx: Math.PI * 0.5 });
+  b.parts.add(cone(r * 0.5, h * 0.1, 6, r * 0.16), TONES.hull, {
+    y: h * 0.2,
+    z: r * 0.6,
+    rx: Math.PI * 0.5,
+  });
   for (const side of [1, -1]) {
     b.parts.add(taperedBox(r * 0.3, h * 0.12, r * 1.3, 0.7), TONES.plate, {
-      x: side * r * 0.7,
+      x: side * r * 0.68,
       y: h * 0.34,
     });
     for (const fwd of [0.45, -0.45]) {
-      b.parts.add(chamferedCylinder(r * 0.26, r * 0.26, h * 0.06, 8), TONES.deep, {
-        x: side * r * 0.7,
+      b.parts.add(chamferedCylinder(r * 0.24, r * 0.24, h * 0.05, 8), TONES.deep, {
+        x: side * r * 0.68,
         y: h * 0.4,
         z: r * fwd,
         rx: Math.PI * 0.5,
       });
-      b.parts.add(chamferedCylinder(r * 0.2, r * 0.2, h * 0.02, 8), TONES.energy, {
-        x: side * r * 0.7,
+      b.parts.add(chamferedCylinder(r * 0.18, r * 0.18, h * 0.02, 8), TONES.energy, {
+        x: side * r * 0.68,
         y: h * 0.4,
-        z: r * fwd + h * 0.055,
+        z: r * fwd + h * 0.05,
         rx: Math.PI * 0.5,
       });
     }
   }
-  nacelles(b, 2, r * 0.55, h * 0.3, -r * 0.75, r * 0.17, r * 0.5);
-  glowCore(b, h * 0.42, r * 0.16, TONES.energyDim);
+  nacelles(b, 2, r * 0.5, h * 0.3, -r * 0.95, r * 0.16, r * 0.4);
+  glowCore(b, h * 0.42, r * 0.14, TONES.energyDim);
 };
 
 const phoenix: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  b.parts.add(capsule(r * 0.42, h * 0.2, 4, 8), TONES.hull, { y: h * 0.32 });
-  glowCore(b, h * 0.52, r * 0.5);
-  wings(b, r * 1.05, r * 0.9, h * 0.46, 0, r * 0.2, 0.45);
+  b.parts.add(capsule(r * 0.4, h * 0.18, 4, 8), TONES.hull, { y: h * 0.3 });
+  glowCore(b, h * 0.5, r * 0.44);
+  wings(b, r * 0.8, r * 0.8, h * 0.46, r * 0.15, 0.45);
   for (const side of [1, -1]) {
-    b.parts.add(cone(r * 0.16, h * 0.4, 6, r * 0.05), TONES.energy, {
-      x: side * r * 0.3,
-      y: h * 0.34,
-      z: -r * 0.4,
+    b.parts.add(cone(r * 0.14, h * 0.34, 6, r * 0.05), TONES.energy, {
+      x: side * r * 0.28,
+      y: h * 0.3,
+      z: -r * 0.3,
       rx: -0.5,
     });
-    b.parts.add(taperedBox(r * 0.14, r * 0.14, r * 0.7, 0.6), TONES.trim, {
-      x: side * r * 0.45,
-      y: h * 0.3,
-      z: -r * 0.15,
+    b.parts.add(taperedBox(r * 0.12, r * 0.12, r * 0.6, 0.6), TONES.trim, {
+      x: side * r * 0.42,
+      y: h * 0.28,
+      z: -r * 0.1,
     });
   }
-  b.parts.add(torusSegment(r * 0.5, r * 0.09, Math.PI * 2, 14, 6), TONES.accent, { y: h * 0.26 });
+  b.parts.add(torusSegment(r * 0.45, r * 0.08, Math.PI * 2, 14, 6), TONES.accent, { y: h * 0.22 });
 };
 
 /* ------------------------------------------------------------------ */
@@ -672,11 +609,25 @@ const scv: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
   trackedHull(b, r * 1.7, h * 0.3, r * 1.5, 4);
-  torsoBox(b, h * 0.34, h * 0.34, r * 1.15, r * 1.1, 0.8);
-  cockpit(b, h * 0.6, r * 0.8, h * 0.2, r * 0.8);
-  b.parts.add(taperedBox(r * 0.3, h * 0.3, r * 0.3, 0.6), TONES.plate, { x: r * 0.6, y: h * 0.35, z: r * 0.3, rx: -0.7 });
-  b.parts.add(cone(r * 0.3, r * 0.5, 6, r * 0.1), TONES.trim, { x: r * 0.6, y: h * 0.28, z: r * 0.65, rx: Math.PI * 0.5 });
-  b.parts.add(chamferedCylinder(r * 0.16, r * 0.16, r * 0.5, 6), TONES.accent, { y: h * 0.5, z: -r * 0.6, rx: Math.PI * 0.5 });
+  torsoBox(b, h * 0.34, h * 0.34, r * 1.1, r * 1.05, 0.8);
+  cockpit(b, h * 0.62, r * 0.76, h * 0.18, r * 0.76);
+  b.parts.add(taperedBox(r * 0.26, h * 0.28, r * 0.26, 0.6), TONES.plate, {
+    x: r * 0.55,
+    y: h * 0.36,
+    z: r * 0.28,
+    rx: -0.7,
+  });
+  b.parts.add(cone(r * 0.26, r * 0.4, 6, r * 0.08), TONES.trim, {
+    x: r * 0.55,
+    y: h * 0.3,
+    z: r * 0.5,
+    rx: FORWARD_TILT,
+  });
+  b.parts.add(chamferedCylinder(r * 0.14, r * 0.14, r * 0.4, 6), TONES.accent, {
+    y: h * 0.5,
+    z: -r * 0.55,
+    rx: Math.PI * 0.5,
+  });
 };
 
 const marine: UnitBuilder = (b) => {
@@ -685,148 +636,161 @@ const marine: UnitBuilder = (b) => {
   legs(b, h * 0.46, r * 0.3, r * 0.32, r * 0.4);
   torsoBox(b, h * 0.42, h * 0.34, r * 1.4, r * 0.9, 0.82);
   torsoBox(b, h * 0.7, h * 0.1, r * 1.2, r * 0.85, 1, TONES.accent);
-  b.parts.add(taperedBox(r * 0.7, h * 0.2, r * 0.4, 0.7), TONES.dark, { y: h * 0.46, z: -r * 0.5 });
-  head(b, h * 0.78, r * 0.34, "helmet");
-  arms(b, h * 0.6, r * 0.5, h * 0.24, r * 0.22, r * 0.2);
-  weapon(b, "rifle", { x: 0, y: h * 0.6, z: r * 0.42, len: r * 0.95, r });
+  b.parts.add(taperedBox(r * 0.66, h * 0.2, r * 0.36, 0.7), TONES.dark, { y: h * 0.46, z: -r * 0.48 });
+  head(b, h * 0.76, r * 0.32, "helmet");
+  arms(b, h * 0.72, r * 0.48, h * 0.22, r * 0.2, r * 0.14);
+  weapon(b, "rifle", { x: 0, y: h * 0.62, z: r * 0.3, len: r * 0.5, r });
 };
 
 const firebat: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  legs(b, h * 0.44, r * 0.34, r * 0.44, r * 0.5);
+  legs(b, h * 0.44, r * 0.32, r * 0.42, r * 0.48);
   torsoBox(b, h * 0.4, h * 0.36, r * 1.6, r * 1.05, 0.85);
-  head(b, h * 0.78, r * 0.32, "helmet");
-  b.parts.add(taperedBox(r * 1.1, h * 0.24, r * 0.5, 0.7), TONES.deep, { y: h * 0.5, z: -r * 0.55 });
+  torsoBox(b, h * 0.72, h * 0.08, r * 1.2, r * 0.9, 1, TONES.accent);
+  head(b, h * 0.76, r * 0.3, "helmet");
+  b.parts.add(taperedBox(r * 1.05, h * 0.24, r * 0.46, 0.7), TONES.deep, { y: h * 0.5, z: -r * 0.52 });
   for (const side of [1, -1]) {
-    b.parts.add(chamferedCylinder(r * 0.18, r * 0.2, h * 0.16, 6), TONES.energy, {
-      x: side * r * 0.34,
-      y: h * 0.72,
-      z: -r * 0.6,
+    b.parts.add(chamferedCylinder(r * 0.16, r * 0.18, h * 0.14, 6), TONES.energy, {
+      x: side * r * 0.3,
+      y: h * 0.74,
+      z: -r * 0.56,
     });
     weapon(b, "cannon", {
-      x: side * r * 0.9,
+      x: side * r * 0.7,
       y: h * 0.76,
-      z: r * 0.2,
-      len: r * 0.7,
-      r: r * 0.5,
+      z: r * 0.15,
+      len: r * 0.35,
+      r: r * 0.35,
     });
   }
-  torsoBox(b, h * 0.72, h * 0.08, r * 1.2, r * 0.9, 1, TONES.accent);
 };
 
 const siegeTank: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
   trackedHull(b, r * 1.9, h * 0.36, r * 1.6, 6);
-  turret(b, h * 0.4, r * 0.6, h * 0.5, r * 0.1, r * 0.95);
-  b.parts.add(panelLineOverlay(r * 1.1, h * 0.06, r * 0.9, { lines: 2, thickness: 0.03 }), TONES.plate, {
-    y: h * 0.92,
+  turret(b, h * 0.4, r * 0.6, h * 0.5, r * 0.1, r * 0.7);
+  b.parts.add(panelLineOverlay(r * 1.05, 0, r * 0.85, { lines: 2, thickness: 0.03 }), TONES.plate, {
+    y: h * 0.66,
   });
-  b.parts.add(taperedBox(r * 0.4, h * 0.14, r * 0.4, 0.8), TONES.deep, { y: h * 0.5, z: -r * 0.5 });
+  b.parts.add(taperedBox(r * 0.36, h * 0.14, r * 0.36, 0.8), TONES.deep, { y: h * 0.52, z: -r * 0.45 });
 };
 
 const thor: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
   for (const side of [1, -1]) {
-    b.parts.add(taperedBox(r * 0.3, h * 0.4, r * 0.35, 0.7), TONES.dark, {
-      x: side * r * 0.42,
-      rx: 0.35,
-    });
-    b.parts.add(taperedBox(r * 0.28, h * 0.36, r * 0.3, 0.6), TONES.plate, {
-      x: side * r * 0.5,
+    b.parts.add(taperedBox(r * 0.28, h * 0.4, r * 0.32, 0.7), TONES.dark, { x: side * r * 0.4, rx: 0.35 });
+    b.parts.add(taperedBox(r * 0.26, h * 0.34, r * 0.28, 0.6), TONES.plate, {
+      x: side * r * 0.46,
       y: h * 0.3,
       rx: -0.5,
     });
-    b.parts.add(taperedBox(r * 0.5, h * 0.1, r * 0.9, 0.9), TONES.deep, {
-      x: side * r * 0.55,
-      z: r * 0.15,
+    b.parts.add(taperedBox(r * 0.46, h * 0.1, r * 0.8, 0.9), TONES.deep, {
+      x: side * r * 0.5,
+      z: r * 0.12,
     });
   }
-  torsoBox(b, h * 0.5, h * 0.3, r * 1.2, r * 0.95, 0.8);
-  cockpit(b, h * 0.52, r * 0.5, h * 0.1, r * 0.5);
-  torsoBox(b, h * 0.78, h * 0.1, r * 0.9, r * 0.7, 0.8, TONES.accent);
-  weapon(b, "cannon", { x: r * 0.85, y: h * 0.52, z: r * 0.3, len: r * 0.9, r: r * 0.55 });
-  b.parts.add(taperedBox(r * 0.4, r * 0.4, r * 0.5, 0.8), TONES.trim, { x: -r * 0.8, y: h * 0.4, z: r * 0.3 });
-  b.parts.add(taperedBox(r * 0.2, h * 0.2, r * 0.2, 0.6), TONES.energy, { y: h * 0.9 });
+  torsoBox(b, h * 0.5, h * 0.3, r * 1.15, r * 0.9, 0.8);
+  torsoBox(b, h * 0.78, h * 0.1, r * 0.85, r * 0.66, 0.8, TONES.accent);
+  cockpit(b, h * 0.52, r * 0.46, h * 0.1, r * 0.46);
+  weapon(b, "cannon", { x: r * 0.6, y: h * 0.52, z: r * 0.28, len: r * 0.45, r: r * 0.32 });
+  b.parts.add(taperedBox(r * 0.36, r * 0.36, r * 0.45, 0.8), TONES.trim, {
+    x: -r * 0.72,
+    y: h * 0.38,
+    z: r * 0.28,
+  });
+  b.parts.add(taperedBox(r * 0.16, h * 0.16, r * 0.16, 0.6), TONES.energy, { y: h * 0.88 });
 };
 
 const reaper: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
   legs(b, h * 0.48, r * 0.26, r * 0.26, r * 0.34);
-  torsoBox(b, h * 0.44, h * 0.32, r * 1.05, r * 0.7, 0.75);
-  head(b, h * 0.78, r * 0.3, "visor");
-  b.parts.add(taperedBox(r * 0.6, h * 0.2, r * 0.4, 0.7), TONES.deep, { y: h * 0.48, z: -r * 0.45 });
+  torsoBox(b, h * 0.44, h * 0.32, r * 1.0, r * 0.68, 0.75);
+  head(b, h * 0.76, r * 0.28, "visor");
+  b.parts.add(taperedBox(r * 0.55, h * 0.2, r * 0.36, 0.7), TONES.deep, { y: h * 0.48, z: -r * 0.42 });
   for (const side of [1, -1]) {
-    b.parts.add(chamferedCylinder(r * 0.13, r * 0.15, h * 0.1, 6), TONES.energy, {
-      x: side * r * 0.24,
+    b.parts.add(chamferedCylinder(r * 0.12, r * 0.14, h * 0.09, 6), TONES.energy, {
+      x: side * r * 0.22,
       y: h * 0.68,
-      z: -r * 0.5,
+      z: -r * 0.46,
     });
   }
-  arms(b, h * 0.6, r * 0.42, h * 0.22, r * 0.18, r * 0.18);
-  weapon(b, "shotgun", { x: 0, y: h * 0.6, z: r * 0.35, len: r * 0.8, r });
+  arms(b, h * 0.72, r * 0.4, h * 0.2, r * 0.16, r * 0.12);
+  weapon(b, "shotgun", { x: 0, y: h * 0.62, z: r * 0.25, len: r * 0.6, r });
 };
 
 const ghost: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
   legs(b, h * 0.48, r * 0.24, r * 0.24, r * 0.32);
-  torsoBox(b, h * 0.44, h * 0.34, r * 0.95, r * 0.65, 0.7, TONES.deep);
-  head(b, h * 0.8, r * 0.3, "hood");
-  b.parts.add(taperedBox(r * 0.5, h * 0.22, r * 0.35, 0.6), TONES.dark, { y: h * 0.48, z: -r * 0.4 });
-  arms(b, h * 0.6, r * 0.4, h * 0.22, r * 0.16, r * 0.2, TONES.dark);
-  weapon(b, "rifle", { x: 0, y: h * 0.62, z: r * 0.3, len: r * 0.95, r: r * 0.85 });
-  b.parts.add(taperedBox(r * 0.2, r * 0.2, r * 0.2, 1), TONES.energyDim, { y: h * 0.92, z: -r * 0.2 });
+  torsoBox(b, h * 0.44, h * 0.34, r * 0.92, r * 0.62, 0.7, TONES.deep);
+  head(b, h * 0.78, r * 0.28, "hood");
+  b.parts.add(taperedBox(r * 0.46, h * 0.22, r * 0.32, 0.6), TONES.dark, { y: h * 0.48, z: -r * 0.36 });
+  arms(b, h * 0.74, r * 0.38, h * 0.2, r * 0.15, r * 0.12, TONES.dark);
+  weapon(b, "rifle", { x: 0, y: h * 0.62, z: r * 0.25, len: r * 0.5, r: r * 0.85 });
+  b.parts.add(taperedBox(r * 0.16, r * 0.16, r * 0.16, 1), TONES.energyDim, { y: h * 0.9, z: -r * 0.18 });
 };
 
 const battlecruiser: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
   b.parts.add(taperedBox(r * 0.9, h * 0.24, r * 1.8, 0.7), TONES.hull, { y: h * 0.18 });
-  b.parts.add(cone(r * 0.6, h * 0.2, 6, r * 0.18), TONES.hull, { y: h * 0.2, z: r * 1.0, rx: Math.PI * 0.5 });
+  b.parts.add(cone(r * 0.55, h * 0.15, 6, r * 0.16), TONES.hull, {
+    y: h * 0.2,
+    z: r * 0.6,
+    rx: FORWARD_TILT,
+  });
   torsoBox(b, h * 0.4, h * 0.22, r * 0.55, r * 0.7, 0.8, TONES.plate);
-  cockpit(b, h * 0.6, r * 0.42, h * 0.08, r * 0.4);
-  b.parts.add(taperedBox(r * 0.16, h * 0.16, r * 0.2, 0.4), TONES.accent, { y: h * 0.62, z: -r * 0.15 });
+  cockpit(b, h * 0.6, r * 0.4, h * 0.08, r * 0.38);
+  b.parts.add(taperedBox(r * 0.14, h * 0.16, r * 0.18, 0.4), TONES.accent, { y: h * 0.62, z: -r * 0.12 });
   for (const side of [1, -1]) {
-    b.parts.add(taperedBox(r * 0.3, h * 0.14, r * 0.8, 0.6), TONES.plate, {
-      x: side * r * 0.55,
+    b.parts.add(taperedBox(r * 0.28, h * 0.14, r * 0.8, 0.6), TONES.plate, {
+      x: side * r * 0.5,
       y: h * 0.3,
     });
     b.parts.add(taperedBox(r * 0.12, h * 0.2, r * 0.5, 0.4), TONES.deep, {
-      x: side * r * 0.85,
+      x: side * r * 0.8,
       y: h * 0.22,
       z: -r * 0.2,
     });
   }
-  nacelles(b, 2, r * 0.6, h * 0.28, -r * 0.85, r * 0.16, r * 0.42);
-  wings(b, r * 0.5, r * 0.6, h * 0.3, r * 0.1, r * 0.5, 0.1);
+  nacelles(b, 2, r * 0.55, h * 0.28, -r * 0.95, r * 0.15, r * 0.3);
+  wings(b, r * 0.45, r * 0.5, h * 0.3, r * 0.45, 0.1);
 };
 
 const raven: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  b.parts.add(capsule(r * 0.42, r * 0.5, 3, 8), TONES.hull, { y: h * 0.42, ry: Math.PI * 0.5 });
-  cockpit(b, h * 0.5, r * 0.5, h * 0.14, r * 0.7);
-  wings(b, r * 0.95, r * 0.7, h * 0.45, r * 0.1, r * 0.35, 0.2);
+  b.parts.add(capsule(r * 0.4, r * 0.5, 3, 8), TONES.hull, {
+    y: h * 0.42,
+    z: -r * 0.5,
+    rx: Math.PI * 0.5,
+  });
+  cockpit(b, h * 0.46, r * 0.46, h * 0.13, r * 0.62);
+  wings(b, r * 0.6, r * 0.6, h * 0.42, r * 0.28, 0.2);
   for (const side of [1, -1]) {
-    b.parts.add(taperedBox(r * 0.12, h * 0.3, r * 0.3, 0.4), TONES.plate, {
-      x: side * r * 0.5,
-      y: h * 0.3,
-      z: -r * 0.35,
+    b.parts.add(taperedBox(r * 0.1, h * 0.26, r * 0.26, 0.4), TONES.plate, {
+      x: side * r * 0.45,
+      y: h * 0.32,
+      z: -r * 0.28,
       rx: 0.3,
     });
-    b.parts.add(chamferedCylinder(r * 0.12, r * 0.14, h * 0.12, 6), TONES.energy, {
-      x: side * r * 0.3,
+    b.parts.add(chamferedCylinder(r * 0.1, r * 0.12, h * 0.1, 6), TONES.energy, {
+      x: side * r * 0.26,
       y: h * 0.3,
-      z: -r * 0.5,
+      z: -r * 0.42,
       rx: -0.3,
     });
   }
-  b.parts.add(chamferedCylinder(r * 0.24, r * 0.2, r * 0.3, 8), TONES.deep, { y: h * 0.22, z: r * 0.35 });
-  b.parts.add(chamferedCylinder(r * 0.09, r * 0.09, r * 0.5, 6), TONES.accent, { y: h * 0.2, z: r * 0.5, rx: Math.PI * 0.5 });
+  b.parts.add(chamferedCylinder(r * 0.2, r * 0.17, r * 0.26, 8), TONES.deep, { y: h * 0.24, z: r * 0.3 });
+  b.parts.add(chamferedCylinder(r * 0.08, r * 0.08, r * 0.4, 6), TONES.accent, {
+    y: h * 0.22,
+    z: r * 0.42,
+    rx: FORWARD_TILT,
+  });
 };
 
 const medic: UnitBuilder = (b) => {
@@ -834,21 +798,21 @@ const medic: UnitBuilder = (b) => {
   const h = b.height;
   legs(b, h * 0.46, r * 0.28, r * 0.3, r * 0.38);
   torsoBox(b, h * 0.42, h * 0.34, r * 1.25, r * 0.85, 0.82);
-  head(b, h * 0.78, r * 0.32, "helmet");
-  b.parts.add(taperedBox(r * 0.65, h * 0.22, r * 0.4, 0.8), TONES.trim, { y: h * 0.46, z: -r * 0.45 });
+  head(b, h * 0.76, r * 0.3, "helmet");
+  b.parts.add(taperedBox(r * 0.6, h * 0.22, r * 0.36, 0.8), TONES.trim, { y: h * 0.46, z: -r * 0.42 });
   for (const side of [1, -1]) {
-    b.parts.add(chamferedCylinder(r * 0.14, r * 0.14, h * 0.16, 6), TONES.accent, {
-      x: side * r * 0.22,
+    b.parts.add(chamferedCylinder(r * 0.12, r * 0.12, h * 0.14, 6), TONES.accent, {
+      x: side * r * 0.2,
       y: h * 0.5,
-      z: -r * 0.45,
+      z: -r * 0.42,
     });
   }
-  arms(b, h * 0.62, r * 0.46, h * 0.22, r * 0.2, r * 0.28);
+  arms(b, h * 0.72, r * 0.44, h * 0.2, r * 0.18, r * 0.2);
   for (const side of [1, -1]) {
-    b.parts.add(chamferedCylinder(r * 0.22, r * 0.26, r * 0.2, 8), TONES.energy, {
-      x: side * r * 0.36,
-      y: h * 0.64,
-      z: r * 0.5,
+    b.parts.add(chamferedCylinder(r * 0.18, r * 0.22, r * 0.18, 8), TONES.energy, {
+      x: side * r * 0.32,
+      y: h * 0.62,
+      z: r * 0.4,
       rx: Math.PI * 0.5,
     });
   }
@@ -861,29 +825,29 @@ const medic: UnitBuilder = (b) => {
 const drone: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  carapace(b, h * 0.42, r * 0.85, h * 0.55);
-  torsoBox(b, h * 0.34, h * 0.22, r * 0.9, r * 1.3, 0.6);
+  carapace(b, h * 0.42, r * 0.8, h * 0.55);
+  torsoBox(b, h * 0.34, h * 0.22, r * 0.9, r * 1.2, 0.6);
   head(b, h * 0.36, r * 0.3, "mandible");
-  insectLegs(b, 4, r * 0.85, h * 0.45, h * 0.5, r * 0.16);
+  insectLegs(b, 4, r * 0.85, h * 0.5, r * 0.16);
   for (const side of [1, -1]) {
-    weapon(b, "claw", { x: side * r * 0.55, y: h * 0.3, z: r * 0.7, len: r * 0.5, r });
+    weapon(b, "claw", { x: side * r * 0.5, y: h * 0.3, z: r * 0.5, len: r * 0.4, r });
   }
-  b.parts.add(cone(r * 0.2, r * 0.5, 5), TONES.trim, { y: h * 0.72, z: -r * 0.4, rx: -0.9 });
+  b.parts.add(cone(r * 0.18, r * 0.45, 5), TONES.trim, { y: h * 0.7, z: -r * 0.35, rx: -0.9 });
 };
 
 const zergling: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  carapace(b, h * 0.45, r * 0.95, h * 0.6, TONES.hull);
+  carapace(b, h * 0.45, r * 0.9, h * 0.6);
   b.parts.add(taperedBox(r * 0.8, h * 0.4, r * 0.9, 0.7), TONES.plate, { y: h * 0.28, z: r * 0.35 });
   head(b, h * 0.32, r * 0.34, "mandible");
-  insectLegs(b, 4, r * 0.95, h * 0.45, h * 0.55, r * 0.14);
+  insectLegs(b, 4, r * 0.9, h * 0.5, r * 0.14);
   for (const side of [1, -1]) {
-    b.parts.add(cone(r * 0.12, r * 0.55, 4), TONES.trim, {
-      x: side * r * 0.25,
-      y: h * 0.62,
-      z: -r * 0.7,
-      rx: 0.9,
+    b.parts.add(cone(r * 0.1, r * 0.4, 4), TONES.trim, {
+      x: side * r * 0.22,
+      y: h * 0.6,
+      z: -r * 0.6,
+      rx: -0.9,
     });
   }
 };
@@ -892,158 +856,159 @@ const hydralisk: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
   for (const side of [1, -1]) {
-    b.parts.add(taperedBox(r * 0.24, h * 0.45, r * 0.28, 0.6), TONES.dark, {
-      x: side * r * 0.34,
-      rx: side * 0.0,
-    });
-    b.parts.add(taperedBox(r * 0.3, h * 0.12, r * 0.5, 0.8), TONES.deep, { x: side * r * 0.4, z: r * 0.1 });
+    b.parts.add(taperedBox(r * 0.24, h * 0.45, r * 0.28, 0.6), TONES.dark, { x: side * r * 0.32 });
+    b.parts.add(taperedBox(r * 0.3, h * 0.12, r * 0.5, 0.8), TONES.deep, { x: side * r * 0.38, z: r * 0.1 });
   }
-  carapace(b, h * 0.5, r * 0.7, h * 0.4, TONES.hull);
-  torsoBox(b, h * 0.42, h * 0.3, r * 0.8, r * 1.1, 0.6, TONES.plate);
+  carapace(b, h * 0.5, r * 0.66, h * 0.4);
+  torsoBox(b, h * 0.42, h * 0.3, r * 0.8, r * 1.05, 0.6, TONES.plate);
   head(b, h * 0.46, r * 0.3, "beak");
   for (const side of [1, -1]) {
-    b.parts.add(cone(r * 0.16, r * 1.15, 5), TONES.energyDim, {
-      x: side * r * 0.34,
+    b.parts.add(cone(r * 0.15, r * 0.7, 5), TONES.energyDim, {
+      x: side * r * 0.32,
       y: h * 0.6,
-      z: r * 0.5,
-      rx: -1.35,
+      z: r * 0.3,
+      rx: FORWARD_TILT,
     });
   }
-  spines(b, 3, r * 0.5, h * 0.72, r * 0.35, r * 0.09, 771);
+  spines(b, 3, r * 0.5, h * 0.72, r * 0.3, r * 0.09, 771);
 };
 
 const ultralisk: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  insectLegs(b, 4, r * 0.9, h * 0.5, h * 0.55, r * 0.24);
-  carapace(b, h * 0.52, r * 0.95, h * 0.5, TONES.hull);
-  torsoBox(b, h * 0.4, h * 0.4, r * 0.9, r * 1.35, 0.75, TONES.plate);
+  insectLegs(b, 4, r * 0.85, h * 0.5, r * 0.24);
+  carapace(b, h * 0.52, r * 0.9, h * 0.5);
+  torsoBox(b, h * 0.4, h * 0.4, r * 0.9, r * 1.3, 0.75, TONES.plate);
   head(b, h * 0.4, r * 0.34, "mandible");
   for (const side of [1, -1]) {
-    b.parts.add(cone(r * 0.22, r * 1.5, 6, r * 0.05), TONES.trim, {
+    b.parts.add(cone(r * 0.2, r * 0.6, 6, r * 0.05), TONES.trim, {
       x: side * r * 0.45,
       y: h * 0.22,
-      z: r * 0.8,
-      rx: -1.3,
+      z: r * 0.4,
+      rx: FORWARD_TILT,
     });
   }
-  spines(b, 5, r * 0.7, h * 0.72, r * 0.5, r * 0.13, 4242);
+  spines(b, 5, r * 0.7, h * 0.72, r * 0.45, r * 0.13, 4242);
 };
 
 const queen: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
   for (const side of [1, -1]) {
-    b.parts.add(taperedBox(r * 0.22, h * 0.42, r * 0.26, 0.6), TONES.dark, { x: side * r * 0.3, rx: 0.25 });
-    b.parts.add(taperedBox(r * 0.3, h * 0.1, r * 0.5, 0.8), TONES.deep, { x: side * r * 0.35, z: r * 0.15 });
+    b.parts.add(taperedBox(r * 0.2, h * 0.42, r * 0.24, 0.6), TONES.dark, { x: side * r * 0.28, rx: 0.25 });
+    b.parts.add(taperedBox(r * 0.28, h * 0.1, r * 0.46, 0.8), TONES.deep, { x: side * r * 0.32, z: r * 0.12 });
   }
-  torsoBox(b, h * 0.44, h * 0.36, r * 0.7, r * 0.9, 0.65, TONES.hull);
+  torsoBox(b, h * 0.44, h * 0.36, r * 0.68, r * 0.86, 0.65);
   head(b, h * 0.78, r * 0.3, "crest");
-  b.parts.add(sphereLowPoly(r * 0.42, 8, 5), TONES.energyDim, { y: h * 0.5, z: -r * 0.45 });
+  b.parts.add(sphereLowPoly(r * 0.36, 8, 5), TONES.energyDim, { y: h * 0.5, z: -r * 0.4 });
   for (const side of [1, -1]) {
-    b.parts.add(taperedBox(r * 0.12, h * 0.34, r * 0.5, 0.4), TONES.plate, {
-      x: side * r * 0.5,
+    b.parts.add(taperedBox(r * 0.1, h * 0.3, r * 0.42, 0.4), TONES.plate, {
+      x: side * r * 0.44,
       y: h * 0.5,
-      z: -r * 0.3,
+      z: -r * 0.26,
       rz: side * 0.6,
     });
   }
-  b.parts.add(cone(r * 0.14, r * 0.6, 5), TONES.energy, { y: h * 0.34, z: r * 0.6, rx: -1.2 });
+  b.parts.add(cone(r * 0.12, r * 0.5, 5), TONES.energy, { y: h * 0.34, z: r * 0.35, rx: FORWARD_TILT });
 };
 
 const roach: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  insectLegs(b, 6, r * 0.9, h * 0.45, h * 0.5, r * 0.12);
-  carapace(b, h * 0.45, r * 0.95, h * 0.55, TONES.hull);
+  insectLegs(b, 6, r * 0.85, h * 0.45, r * 0.12);
+  carapace(b, h * 0.45, r * 0.9, h * 0.55);
   head(b, h * 0.3, r * 0.26, "beak");
-  b.parts.add(cone(r * 0.18, r * 0.55, 5), TONES.energyDim, { y: h * 0.36, z: r * 0.7, rx: -1.35 });
-  spines(b, 4, r * 0.6, h * 0.62, r * 0.32, r * 0.1, 991);
+  b.parts.add(cone(r * 0.16, r * 0.4, 5), TONES.energyDim, { y: h * 0.36, z: r * 0.45, rx: FORWARD_TILT });
+  spines(b, 4, r * 0.6, h * 0.62, r * 0.3, r * 0.1, 991);
 };
 
 const lurker: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  insectLegs(b, 4, r * 0.8, h * 0.4, h * 0.42, r * 0.16);
-  carapace(b, h * 0.5, r * 0.85, h * 0.5, TONES.hull);
-  b.parts.add(taperedBox(r * 0.7, h * 0.3, r * 0.8, 0.7), TONES.plate, { y: h * 0.25, z: r * 0.3 });
+  insectLegs(b, 4, r * 0.8, h * 0.4, r * 0.16);
+  carapace(b, h * 0.5, r * 0.8, h * 0.5);
+  b.parts.add(taperedBox(r * 0.7, h * 0.3, r * 0.8, 0.7), TONES.plate, { y: h * 0.25, z: r * 0.28 });
   for (const side of [1, -1]) {
-    b.parts.add(cone(r * 0.2, r * 0.95, 5, r * 0.06), TONES.energyDim, {
-      x: side * r * 0.42,
+    b.parts.add(cone(r * 0.18, r * 0.5, 5, r * 0.05), TONES.energyDim, {
+      x: side * r * 0.4,
       y: h * 0.2,
-      z: r * 0.6,
-      rx: -1.45,
+      z: r * 0.4,
+      rx: FORWARD_TILT,
     });
   }
-  spines(b, 4, r * 0.55, h * 0.62, r * 0.3, r * 0.1, 313);
+  spines(b, 4, r * 0.55, h * 0.62, r * 0.28, r * 0.1, 313);
 };
 
 const infestor: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  b.parts.add(capsule(r * 0.55, h * 0.25, 4, 8), TONES.hull, { y: h * 0.35 });
-  glowCore(b, h * 0.72, r * 0.45, TONES.energyDim);
+  b.parts.add(capsule(r * 0.5, h * 0.22, 4, 8), TONES.hull, { y: h * 0.35 });
+  glowCore(b, h * 0.7, r * 0.4, TONES.energyDim);
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2;
-    b.parts.add(taperedBox(r * 0.12, h * 0.45, r * 0.12, 0.3), TONES.dark, {
-      x: Math.cos(a) * r * 0.3,
+    b.parts.add(taperedBox(r * 0.11, h * 0.4, r * 0.11, 0.3), TONES.dark, {
+      x: Math.cos(a) * r * 0.28,
       y: h * 0.05,
-      z: Math.sin(a) * r * 0.3,
+      z: Math.sin(a) * r * 0.28,
       rz: -Math.cos(a) * 0.5,
       rx: Math.sin(a) * 0.5,
     });
   }
-  b.parts.add(cone(r * 0.16, r * 0.7, 5), TONES.energy, { y: h * 0.55, z: r * 0.55, rx: -1.3 });
+  b.parts.add(cone(r * 0.14, r * 0.5, 5), TONES.energy, { y: h * 0.5, z: r * 0.35, rx: FORWARD_TILT });
 };
 
 const corruptor: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  b.parts.add(sphereLowPoly(r * 0.7, 8, 5), TONES.hull, { y: h * 0.45, sy: 0.55 });
-  b.parts.add(taperedBox(r * 0.5, h * 0.2, r * 1.1, 0.6), TONES.plate, { y: h * 0.5, z: r * 0.35 });
-  wings(b, r * 0.95, r * 0.8, h * 0.55, 0, r * 0.25, 0.3, TONES.hull);
+  b.parts.add(sphereLowPoly(r * 0.65, 8, 5), TONES.hull, { y: h * 0.45, sy: 0.55 });
+  b.parts.add(taperedBox(r * 0.48, h * 0.2, r * 1.0, 0.6), TONES.plate, { y: h * 0.5, z: r * 0.32 });
+  wings(b, r * 0.7, r * 0.7, h * 0.55, r * 0.2, 0.3, TONES.hull);
   for (const side of [1, -1]) {
-    b.parts.add(chamferedCylinder(r * 0.16, r * 0.18, r * 0.45, 6), TONES.energy, {
-      x: side * r * 0.4,
+    b.parts.add(chamferedCylinder(r * 0.14, r * 0.16, r * 0.35, 6), TONES.energy, {
+      x: side * r * 0.36,
       y: h * 0.42,
-      z: -r * 0.6,
+      z: -r * 0.55,
       rx: Math.PI * 0.5,
     });
   }
-  b.parts.add(cone(r * 0.18, h * 0.5, 6, r * 0.05), TONES.energyDim, { y: h * 0.2, z: r * 0.3, rx: -0.3 });
+  b.parts.add(cone(r * 0.16, h * 0.3, 6, r * 0.05), TONES.energyDim, {
+    y: h * 0.24,
+    z: r * 0.28,
+    rx: FORWARD_TILT,
+  });
 };
 
 const guardian: UnitBuilder = (b) => {
   const r = b.radius;
   const h = b.height;
-  b.parts.add(sphereLowPoly(r * 0.62, 8, 5), TONES.hull, { y: h * 0.6, sy: 0.7 });
-  b.parts.add(taperedBox(r * 0.5, h * 0.2, r * 0.9, 0.6), TONES.plate, { y: h * 0.6, z: r * 0.4 });
+  b.parts.add(sphereLowPoly(r * 0.58, 8, 5), TONES.hull, { y: h * 0.6, sy: 0.7 });
+  b.parts.add(taperedBox(r * 0.48, h * 0.2, r * 0.85, 0.6), TONES.plate, { y: h * 0.6, z: r * 0.35 });
   for (const side of [1, -1]) {
-    b.parts.add(sphereLowPoly(r * 0.34, 6, 4), TONES.plate, { x: side * r * 0.7, y: h * 0.62, sz: 1.2 });
-    b.parts.add(cone(r * 0.2, r * 0.8, 5, r * 0.06), TONES.trim, {
-      x: side * r * 0.85,
+    b.parts.add(sphereLowPoly(r * 0.3, 6, 4), TONES.plate, { x: side * r * 0.68, y: h * 0.62, sz: 1.2 });
+    b.parts.add(cone(r * 0.18, r * 0.5, 5, r * 0.06), TONES.trim, {
+      x: side * r * 0.82,
       y: h * 0.5,
-      z: r * 0.45,
-      rx: -1.4,
+      z: r * 0.35,
+      rx: FORWARD_TILT,
     });
-    b.parts.add(chamferedCylinder(r * 0.14, r * 0.16, r * 0.4, 6), TONES.energy, {
-      x: side * r * 0.3,
+    b.parts.add(chamferedCylinder(r * 0.12, r * 0.14, r * 0.32, 6), TONES.energy, {
+      x: side * r * 0.28,
       y: h * 0.55,
-      z: -r * 0.5,
+      z: -r * 0.45,
       rx: Math.PI * 0.5,
     });
   }
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + 0.4;
-    b.parts.add(cone(r * 0.12, h * 0.35, 5, r * 0.04), TONES.energyDim, {
-      x: Math.cos(a) * r * 0.35,
+    b.parts.add(cone(r * 0.1, h * 0.3, 5, r * 0.04), TONES.energyDim, {
+      x: Math.cos(a) * r * 0.3,
       y: h * 0.3,
-      z: Math.sin(a) * r * 0.35,
+      z: Math.sin(a) * r * 0.3,
       rx: Math.sin(a) * 0.6,
       rz: -Math.cos(a) * 0.6,
     });
   }
-  spines(b, 3, r * 0.45, h * 0.85, r * 0.28, r * 0.1, 55);
+  spines(b, 3, r * 0.42, h * 0.85, r * 0.25, r * 0.1, 55);
 };
 
 /* ------------------------------------------------------------------ */
@@ -1051,7 +1016,6 @@ const guardian: UnitBuilder = (b) => {
 /* ------------------------------------------------------------------ */
 
 const UNIT_BUILDERS: Record<string, UnitBuilder> = {
-  // Protoss
   probe,
   zealot,
   stalker,
@@ -1062,7 +1026,6 @@ const UNIT_BUILDERS: Record<string, UnitBuilder> = {
   archon,
   carrier,
   phoenix,
-  // Terran
   scv,
   marine,
   firebat,
@@ -1073,7 +1036,6 @@ const UNIT_BUILDERS: Record<string, UnitBuilder> = {
   battlecruiser: battlecruiser,
   raven,
   medic,
-  // Zerg
   drone,
   zergling,
   hydralisk,
@@ -1093,9 +1055,9 @@ export function airHoverLift(height: number): number {
 
 /**
  * Builds the unit for `typeKey`. Building keys are delegated to
- * `buildingGeometry`, so this never throws for any of the 57 roster keys;
- * an unknown key is a hard error, because silently rendering a placeholder
- * would hide a data/roster mismatch.
+ * `buildingGeometry`, so this never throws for any of the 57 roster keys; an
+ * unknown key is a hard error, because quietly rendering a placeholder would
+ * hide a roster/mesh mismatch.
  */
 export function unitGeometry(typeKey: string): THREE.BufferGeometry {
   const def = entityDef(typeKey);
@@ -1108,18 +1070,17 @@ function assemble(def: UnitDef): THREE.BufferGeometry {
   if (!builder) throw new Error(`unitGeometry(): no builder for roster unit "${def.key}"`);
   const build: Build = {
     def,
-    key: def.key,
-    race: raceOfEntity(def.key),
     radius: def.size.radius,
     height: def.size.height,
     air: def.movement === "air",
     parts: new PartList("body"),
   };
   builder(build);
+  const lift = build.air ? airHoverLift(def.size.height) : 0;
   const body = build.parts.merge();
-  fitFootprint(body, def.size.radius, def.size.height);
+  fitFootprint(body, def.size.radius, def.size.height - lift);
   if (!build.air) return body;
-  body.translate(0, airHoverLift(def.size.height), 0);
+  body.translate(0, lift, 0);
   return withShadowDecal(body, def.size.radius);
 }
 
@@ -1127,7 +1088,7 @@ function assemble(def: UnitDef): THREE.BufferGeometry {
 function withShadowDecal(body: THREE.BufferGeometry, radius: number): THREE.BufferGeometry {
   const decal = chamferedCylinder(radius * 1.05, radius * 1.05, 0.02, 14);
   decal.translate(0, 0.01, 0);
-  setPartColor(decal, { r: 0.12, g: 0.12, b: 0.14, glow: 0 });
+  setPartColor(decal, { r: 0.1, g: 0.1, b: 0.12 });
   return mergeGroups([body, decal]);
 }
 
@@ -1146,9 +1107,9 @@ export interface GeometryCheck {
 }
 
 /**
- * Walks every key in the roster and rebuilds its geometry, checking that it
- * is non-empty, coloured, base-centred and inside the collision footprint.
- * Development aid: call it from a test or a boot-time assert, never per frame.
+ * Walks every key in the roster and rebuilds its geometry, checking that it is
+ * non-empty, coloured, base-centred and inside the collision footprint.
+ * Development aid: run it from a test or a boot-time assert, never per frame.
  */
 export function selfCheckGeometryCoverage(): GeometryCheck[] {
   const results: GeometryCheck[] = [];
@@ -1162,32 +1123,23 @@ export function selfCheckGeometryCoverage(): GeometryCheck[] {
     try {
       geometry = unitGeometry(key);
       triangles = (geometry.getAttribute("position").count / 3) | 0;
-      const position = geometry.getAttribute("position");
-      const colour = geometry.getAttribute("color");
       geometry.computeBoundingBox();
       const box = geometry.boundingBox;
       if (triangles === 0) reason = "empty geometry";
-      else if (position.count !== colour.count) reason = "colour attribute missing";
+      else if (geometry.getAttribute("color")?.count !== geometry.getAttribute("position").count) {
+        reason = "vertex colour attribute does not match the position attribute";
+      } else if (!geometry.getAttribute("uv")) reason = "uv attribute missing";
       else if (!box) reason = "no bounding box";
       else if (box.min.y < -0.02) reason = `origin below ground (${box.min.y.toFixed(3)})`;
       else if (Math.max(box.max.x, -box.min.x, box.max.z, -box.min.z) > radius * 1.13) {
         reason = `footprint exceeds collision radius ${radius}`;
       } else if (box.max.y > height * 1.06) reason = `taller than roster height ${height}`;
-      else if (!geometry.getAttribute("uv")) reason = "uv attribute missing";
     } catch (error) {
       reason = error instanceof Error ? error.message : String(error);
     } finally {
       geometry?.dispose();
     }
-    results.push({
-      key,
-      kind: def.kind,
-      ok: reason === "ok",
-      reason,
-      triangles,
-      radius,
-      height,
-    });
+    results.push({ key, kind: def.kind, ok: reason === "ok", reason, triangles, radius, height });
   }
   return results;
 }
@@ -1195,17 +1147,6 @@ export function selfCheckGeometryCoverage(): GeometryCheck[] {
 /** Throws on the first roster key whose geometry fails the self-check. */
 export function assertGeometryCoverage(): void {
   for (const check of selfCheckGeometryCoverage()) {
-    if (!check.ok) {
-      throw new Error(`assertGeometryCoverage(): ${check.key} — ${check.reason}`);
-    }
+    if (!check.ok) throw new Error(`assertGeometryCoverage(): ${check.key} — ${check.reason}`);
   }
 }
-
-/** Greebled detail count helper shared with the building builders. */
-export function detailBudget(radius: number, height: number): { count: number; scale: number } {
-  const area = radius * height;
-  return { count: Math.round(Math.min(26, Math.max(3, area * 2.2))), scale: Math.min(0.5, Math.max(0.1, radius * 0.16)) };
-}
-
-/** Exposed so callers can greeble a hull without importing the toolkit. */
-export { greeble };
