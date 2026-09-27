@@ -9,19 +9,16 @@
  * height field (see terrainMaterial.ts), so the 145k-vertex buffer costs one
  * texture fetch per vertex rather than a 145k-iteration JS loop.
  *
- * WHY THERE ARE NO SEAMS: each level's outer band is morphed onto its parent
- * grid (twice its own cell size) in the vertex shader. At the end of the band
- * a level's outermost vertices sit exactly on the next level's inner ring, and
- * both sample the same texels of the same height field, so the two surfaces
- * meet with no gap, no overlap and no stitching skirt. The centre block's
- * boundary lands on ring 1's inner edge by the same construction. Because the
- * snap origin is a multiple of 2 cells, every level's grid is aligned to world
- * zero, so the morph needs no per-level uniform.
- *
- * The finest cell is 1 m — exactly the height field's own lattice spacing
- * (shared/TERRAIN.md samples at 1 m and interpolates bilinearly), so the
- * rendered surface and `heightField(map).sample()` agree to the millimetre and
- * ground units neither float nor sink.
+ * WHY THERE ARE NO SEAMS: every level is the same `2n × 2n` grid at twice the
+ * cell size of the level inside it, and the solid centre block is built at
+ * that same `2n` size, so each level's outer edge lands exactly on the inner
+ * edge of the level around it with no annulus left uncovered. Each level's
+ * outer band is then morphed onto its parent grid (twice its own cell size) in
+ * the vertex shader, so at the end of the band the two surfaces meet on
+ * shared vertices sampling the same texels of the same height field — no gap,
+ * no overlap, no stitching skirt. Because the snap origin is a whole number of
+ * the coarsest cell, every level's grid is aligned to the others, so the morph
+ * needs no per-level uniform.
  */
 import * as THREE from "three";
 import type { MapDef } from "@shared/protocol";
@@ -41,8 +38,14 @@ import {
  */
 const COVER_RADIUS = 480;
 
-/** Total clipmap cells across all levels; 160k cells ≈ 320k triangles. */
-const CELL_BUDGET = 160_000;
+/**
+ * Total clipmap cells across all levels; 200k cells ≈ 400k triangles. The
+ * centre block is `2n × 2n` (see buildLevel) so that it exactly fills the hole
+ * of ring 1, which is why this is larger than the ring-only accounting it
+ * replaced — the old shape was cheap because it left an annulus of missing
+ * ground around the focus point.
+ */
+const CELL_BUDGET = 200_000;
 
 /** Rings a preset may add on top of its own `terrainLodRings` for coverage. */
 const MAX_RINGS = 4;
@@ -73,7 +76,8 @@ export interface ClipmapConfig {
 export function resolveClipmap(settings: QualitySettings): ClipmapConfig {
   const rings = settings.terrainLodRings;
   let levelCells = rings >= 5 ? 144 : rings >= 4 ? 128 : rings >= 3 ? 96 : 64;
-  const cellsFor = (count: number): number => levelCells * levelCells * (1 + 3 * count);
+  // The solid centre block is `2n × 2n` and every ring is `(2n)² − n²`.
+  const cellsFor = (count: number): number => levelCells * levelCells * (4 + 3 * count);
   let ringCount = Math.min(3, Math.max(1, rings));
   while (ringCount > 1 && cellsFor(ringCount) > CELL_BUDGET) ringCount--;
   // Coverage next, cheapest way first: one more ring rather than a coarser
@@ -96,15 +100,17 @@ interface LevelGeometry {
 }
 
 /**
- * One clipmap level as a local-space grid. Level 0 is a solid block of
- * `cells × cells`; every other level is a `2·cells × 2·cells` grid with the
- * central `cells × cells` block removed, which is exactly the extent of the
- * level inside it.
+ * One clipmap level as a local-space grid. Every level is a `2·n × 2·n` grid
+ * of `n`-cell blocks; level 0 keeps all of it, and every other level drops the
+ * central `n × n` block, which is exactly the extent of the level inside it.
+ * Building level 0 at the same `2n` size is what makes it fill ring 1's hole
+ * rather than stop half way and leave an annulus of missing ground.
  */
-function buildLevel(level: number, cells: number, cell0: number, hollow: boolean): LevelGeometry {
+function buildLevel(level: number, n: number, cell0: number, hollow: boolean): LevelGeometry {
+  const cells = n * 2;
   const cell = cell0 * Math.pow(2, level);
   const verts = cells + 1;
-  const hole = cells * 0.25; // central quarter, i.e. the inner level's extent
+  const hole = n * 0.5; // the inner level's half extent, in this level's cells
   const inHole = (i: number, j: number): boolean =>
     hollow && i >= hole && i < hole * 3 && j >= hole && j < hole * 3;
 
@@ -168,7 +174,7 @@ export function createClipmapGeometry(config: ClipmapConfig): THREE.BufferGeomet
   const n = config.levelCells;
   const levels: LevelGeometry[] = [];
   for (let level = 0; level <= config.ringCount; level++) {
-    levels.push(buildLevel(level, level === 0 ? n : n * 2, config.cell0, level > 0));
+    levels.push(buildLevel(level, n, config.cell0, level > 0));
   }
 
   let vertexTotal = 0;
@@ -229,7 +235,10 @@ export function buildTerrain(scene: THREE.Scene, map: MapDef, settings: QualityS
   mesh.raycast = makeHeightFieldRaycast(map, mesh);
   scene.add(mesh);
 
-  const snap = config.cell0 * 2;
+  // Every level's grid has to stay nested on the shared origin, or the CDLOD
+  // morph in the vertex shader lands a level's outer band between its parent's
+  // vertices instead of on them. The coarsest cell is the binding constraint.
+  const snap = config.cell0 * Math.pow(2, config.ringCount);
   let snapX = Number.NaN;
   let snapZ = Number.NaN;
 

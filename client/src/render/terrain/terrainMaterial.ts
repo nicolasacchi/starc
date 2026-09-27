@@ -10,10 +10,13 @@
  * cable pulled.
  *
  * What is generated:
- *  - `field`  RGBA16F, (size+1)^2: R = height (m), G = curvature (m, concave
- *            positive), B = macro splat mask, A = slope (1 - n.y). Sampled by
- *            BOTH stages: the vertex stage displaces the clipmap, the fragment
- *            stage drives the splat, the wetness band and the macro AO.
+ *  - `field`  RGBA16F, (size+1)^2: R = height (m), G = concavity, B = macro
+ *            splat mask, A = slope. Sampled by BOTH stages: the vertex stage
+ *            displaces the clipmap, the fragment stage drives the splat, the
+ *            wetness band and the macro AO. G and A are measured over a 6–8 m
+ *            stencil and normalised, because at the field's own 1 m lattice
+ *            they are per-cell noise and drive the splat into a paving-slab
+ *            mosaic. R is the field verbatim — it is what ground units stand on.
  *  - 4 layer albedo maps (RGBA8, repeating): R fine detail, G macro mottle,
  *    B speckle, A crease occlusion. Tinted per biome by uniforms.
  *  - 4 layer normal maps (RGBA8, repeating) derived from the CPU-side gradient
@@ -22,9 +25,18 @@
  *
  * Splat weighting is a per-pixel blend of height, slope and a two-octave noise
  * mask (the macro mask from the field texture plus an analytic fBm), so the
- * layer boundaries are organic instead of contour-banded. Detail strength,
- * mask amplitude and texture mip bias all fade with camera distance, which is
- * what keeps the far terrain from boiling.
+ * layer boundaries are organic instead of contour-banded.
+ *
+ * WHY THE GROUND IS NOT A GRID. Four layer textures on `worldXZ / tileSize` is
+ * a lattice, and a lattice laid flat under an overhead sun reads as paving.
+ * Three things break it, and all three fade out with camera distance so the
+ * far field's mip chain stays coherent: a slow domain warp displaces the
+ * lookup, a slow noise scales the tile size per region, and the detail
+ * contrast itself decays until the far ground is carried by the large-scale
+ * colour and splat variation instead of by texture. The micro-relief bump
+ * that does the near-field work is sampled in a rotated frame at a slowly
+ * varying amplitude, because a single value-noise octave on a 1 m lattice is
+ * precisely the grid it was meant to hide.
  */
 import * as THREE from "three";
 import type { MapDef } from "@shared/protocol";
@@ -121,6 +133,16 @@ interface FieldEntry {
 
 const fieldCache = new Map<string, FieldEntry>();
 
+/**
+ * Grade and concavity are read over a 6 m / 8 m stencil rather than the
+ * field's own 1 m lattice, and both are normalised so a map's authored
+ * `elevation` does not change how the surface is coloured: a slope is a slope
+ * and a crease is a crease whatever the map's total relief is.
+ */
+const GRADE_STENCIL = 3;
+const SLOPE_FULL_SCALE = 0.22;
+const CURVATURE_FULL_SCALE = 0.06;
+
 function buildFieldTexture(map: MapDef): FieldEntry {
   const field = heightField(map);
   const n = field.size + 1;
@@ -128,17 +150,29 @@ function buildFieldTexture(map: MapDef): FieldEntry {
   const data = new Uint16Array(n * n * 4);
   const half = THREE.DataUtils.toHalfFloat;
 
+  let lo = Number.POSITIVE_INFINITY;
+  let hi = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < grid.length; i++) {
+    if (grid[i] < lo) lo = grid[i];
+    if (grid[i] > hi) hi = grid[i];
+  }
+  const curvatureScale = CURVATURE_FULL_SCALE * Math.max(hi - lo, 0.5);
+  const at = (i: number, j: number): number =>
+    grid[
+      (j < 0 ? 0 : j > n - 1 ? n - 1 : j) * n + (i < 0 ? 0 : i > n - 1 ? n - 1 : i)
+    ];
+
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
       const o = (j * n + i) * 4;
       const h = grid[j * n + i];
-      const hl = grid[j * n + Math.max(0, i - 1)];
-      const hr = grid[j * n + Math.min(n - 1, i + 1)];
-      const hd = grid[Math.max(0, j - 1) * n + i];
-      const hu = grid[Math.min(n - 1, j + 1) * n + i];
+      const s = GRADE_STENCIL * 2;
+      const gx = (at(i + GRADE_STENCIL, j) - at(i - GRADE_STENCIL, j)) / s;
+      const gz = (at(i, j + GRADE_STENCIL) - at(i, j - GRADE_STENCIL)) / s;
       // Concave positive: valleys and creases darken, ridges catch the light.
-      const curvature = h - (hl + hr + hd + hu) * 0.25;
-      const slope = 1 - 2 / Math.hypot(hl - hr, 2, hd - hu);
+      const curvature =
+        (h - (at(i + 4, j) + at(i - 4, j) + at(i, j + 4) + at(i, j - 4)) * 0.25) / curvatureScale;
+      const slope = Math.min(1, Math.hypot(gx, gz) / SLOPE_FULL_SCALE);
       const mask = tiledFbm(i / n, j / n, (map.terrain_seed ^ 0x51ed) >>> 0, 4, 4, 0.55);
       data[o] = half(h);
       data[o + 1] = half(curvature);
@@ -404,6 +438,13 @@ vec3 gTerrNormal;
 // world XZ is already aligned to every level's grid: the CDLOD morph below
 // needs no extra uniforms, and it lands the outermost ring of this level
 // exactly on the innermost ring of the next one. No cracks, no stitch skirts.
+//
+// The morphed XZ is what the vertex is *drawn* at, not just what it samples:
+// collapsing the outer band onto the parent grid is what removes the
+// T-junctions along each ring boundary. Sampling the height at the morphed
+// point while leaving the vertex where it was is what produced the black
+// wedges — the two levels drew the same XZ at two different heights.
+vec2 gClipmapLocal;
 void scClipmap( vec3 pos ) {
   vec2 origin = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;
   vec2 local = pos.xz + origin;
@@ -412,19 +453,30 @@ void scClipmap( vec3 pos ) {
   float morph = aLevel < uRingCount
     ? smoothstep( 0.66, 1.0, max( abs( local.x ), abs( local.y ) ) / halfExtent )
     : 0.0;
-  vec2 grid = local / ( 2.0 * cell );
-  vec2 morphed = ( floor( grid ) + mix( fract( grid ), vec2( 0.5 ), morph ) ) * ( 2.0 * cell );
-  gClipmapXZ = morph > 0.0 ? morphed : local;
+  // In units of this level's own cell, `p` indexes its grid. `p / 2` is the
+  // parent cell that pair of vertices sits in; morphing 1.0 pushes both onto
+  // the parent cell's centre vertex, so adjacent pairs collapse into the
+  // degenerate triangles CDLOD is built on.
+  vec2 p = local / cell;
+  vec2 parent = p * 0.5;
+  vec2 world = ( floor( parent ) * 2.0 + fract( parent ) * 2.0 * ( 1.0 - morph ) ) * cell;
+  gClipmapLocal = world - origin;
+  gClipmapXZ = world;
   gClipmapCell = cell;
   gClipmapMorph = morph;
-  gClipmapY = scHeightAt( gClipmapXZ );
+  gClipmapY = scHeightAt( world );
 }
 `;
 
 const GLSL_VERTEX_NORMAL = /* glsl */ `
 vec3 objectNormal = vec3( normal );
 scClipmap( position );
-float scEps = gClipmapCell * ( 1.0 + gClipmapMorph );
+// The normal is a gradient of the height field, so the epsilon has to be
+// wider than the field's own 1 m lattice: sampled at one cell it aliases the
+// field's finest 3 m octave and the ground reads as a quilt of 1 m facets.
+// Three metres is still far below the 48 m landform the shading is there to
+// show.
+float scEps = max( gClipmapCell, 3.0 ) * ( 1.0 + gClipmapMorph );
 float scHL = scHeightAt( gClipmapXZ - vec2( scEps, 0.0 ) );
 float scHR = scHeightAt( gClipmapXZ + vec2( scEps, 0.0 ) );
 float scHD = scHeightAt( gClipmapXZ - vec2( 0.0, scEps ) );
@@ -434,7 +486,7 @@ objectNormal = gTerrNormal;
 `;
 
 const GLSL_VERTEX_BEGIN = /* glsl */ `
-vec3 transformed = vec3( position.x, gClipmapY, position.z );
+vec3 transformed = vec3( gClipmapLocal.x, gClipmapY, gClipmapLocal.y );
 vTerrWorld = vec3( gClipmapXZ.x, gClipmapY, gClipmapXZ.y );
 vTerrNormal = gTerrNormal;
 `;
@@ -443,7 +495,7 @@ vTerrNormal = gTerrNormal;
 // the terrain would cast the shadow of a flat plane at y = 0.
 const GLSL_DEPTH_BEGIN = /* glsl */ `
 scClipmap( position );
-vec3 transformed = vec3( position.x, gClipmapY, position.z );
+vec3 transformed = vec3( gClipmapLocal.x, gClipmapY, gClipmapLocal.y );
 `;
 
 const GLSL_FRAGMENT_PARS = /* glsl */ `
@@ -454,13 +506,15 @@ varying vec3 vTerrWorld;
 varying vec3 vTerrNormal;
 
 // One layer's albedo from a single fetch: R fine detail, G macro mottle,
-// B speckle, A crease occlusion.
-vec3 scLayerAlbedo( vec4 t, vec3 tint ) {
-  float detail = t.r * 2.0;
+// B speckle, A crease occlusion. `detail` is the distance fade — at zero the
+// layer collapses to its flat biome tint, which is what stops the far field
+// from being a grid of texel-sized cells.
+vec3 scLayerAlbedo( vec4 t, vec3 tint, float detail ) {
+  float d = t.r * 2.0;
   float mottle = 0.76 + 0.48 * t.g;
   float speckle = 0.93 + 0.14 * t.b;
   float crease = mix( 0.68, 1.06, t.a );
-  return tint * detail * mottle * speckle * crease;
+  return mix( tint, tint * d * mottle * speckle * crease, detail );
 }
 `;
 
