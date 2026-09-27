@@ -44,13 +44,45 @@ Ruby (`sim/terrain.rb`) and TypeScript (`render/terrain/heightfield.ts`)
 implementations of that document are the same function, and specs assert they
 agree to `1e-9`. If you change one, change the document first.
 
-**The wire protocol is specified in `docs/PROTOCOL.md`.** Message shapes,
-error codes and command rejection codes are all fixed there and mirrored in
-`client/src/shared/protocol.ts`. Change the document, then both sides.
+**Axes: the ground plane is `x`/`z`, height is `y`.** Three.js Y-up, and
+`shared/TERRAIN.md`, `HeightField.sample(x, z)` and `screenToGround` all
+assume it. A snapshot entity carries `x`, `z` and `y` (the server's
+authoritative height), orders carry `x`, `z` (patrol also `x2`, `z2`), and
+the order target is `ox`/`oz`. An earlier protocol said the ground plane was
+`x`/`y`; the sim followed the document and the renderer did not, so every
+entity was placed transposed. If you see `y` used as a ground coordinate, it
+is a bug.
 
-**Entity Z in a snapshot is authoritative.** Clients must not recompute
-terrain height to place a unit. The heightfield is for effects that need the
-ground — decals, contact shadows, VFX grounding.
+**The cable speaks ActionCable's native JSON protocol, not STOMP.**
+ActionCable 8.1 has no STOMP support at all — a STOMP `CONNECT` is silently
+ignored. Each WebSocket frame is one JSON document: client sends
+`{"command":"subscribe"|"message"|"unsubscribe", "identifier": "<JSON-encoded
+channel params>", "data": "<JSON string>"}`; the server replies with
+`welcome`, `confirm_subscription`, `ping`, `disconnect` or a payload frame
+routed by `identifier`. Two ordering rules are load-bearing and both are
+asserted: nothing may be written before `welcome`, and a `message` waits for
+its subscription's `confirm_subscription`. `docs/PROTOCOL.md` §1 has the
+framing.
+
+**`docs/PROTOCOL.md` is the source of truth;** `client/src/shared/protocol.ts`
+mirrors it. Change the document, then both sides.
+
+**A spec that pins a method nothing calls is the most expensive kind of
+test.** This codebase accumulated three dead-but-fully-tested paths that way
+(`SceneManager.applySnapshot`, `World#snapshot_for`, `GameConnection.sampleWorld`)
+plus seventeen methods with no references at all. Every one removed was a
+*third spelling* of a rule already enforced inline, and two had drifted far
+enough to encode a rule the code does not actually enforce. So: a test proves
+the thing is reachable only if something production calls it. When you find
+code with specs but no caller, treat the spec's claim as a hypothesis to check
+against the enforced behaviour — it is more often wrong than the code.
+
+**Test the wiring, not the helper.** Every serious defect in this project
+passed a fully green suite: an unstyled app shell, a 3D world that was never
+drawn, a post-FX chain that replaced the scene with a smear, a match that
+never simulated, and a shared cable whose second consumer never subscribed.
+`spec/e2e` exists because a mocked channel cannot see those. When you add a
+test, ask what it would still pass if the production call were deleted.
 
 ## Layout rules
 
