@@ -292,6 +292,7 @@ export class App implements UiHost {
   /** Canvas, HUD host, and every overlay the loop draws over. */
   private buildGameLayer(doc: Document, parent: HTMLElement): void {
     const layer = this.screenContainer(doc, parent, "game");
+    this.containers.game = layer;
 
     const canvas = doc.createElement("canvas");
     canvas.className = "canvas";
