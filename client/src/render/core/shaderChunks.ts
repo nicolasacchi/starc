@@ -348,7 +348,8 @@ export function injectShaderChunks(material: THREE.Material, options: ShaderChun
     [U_FRESNEL_POWER]: { value: options.fresnelPower ?? 3 },
     [U_RIM_COLOR]: { value: (options.rimColor ?? new THREE.Color(0x66ddff)).clone() },
   };
-  if (needsTime || panel || fresnel) uniforms[U_TIME] = { value: 0 };
+  const usesTime = needsTime || panel || fresnel || emissive;
+  if (usesTime) uniforms[U_TIME] = { value: 0 };
 
   const previous = material.onBeforeCompile;
   const previousKey = material.customProgramCacheKey?.();
@@ -359,7 +360,7 @@ export function injectShaderChunks(material: THREE.Material, options: ShaderChun
     for (const [name, uniform] of Object.entries(uniforms)) shader.uniforms[name] = uniform;
 
     const declarations: string[] = [`uniform float ${U_CHUNK_STRENGTH};`, `uniform float ${U_CHUNK_SCALE};`];
-    if (needsTime || panel || fresnel) declarations.push(`uniform float ${U_TIME};`);
+    if (usesTime) declarations.push(`uniform float ${U_TIME};`);
 
     if (detail) {
       declarations.push(GLSL_HASH, GLSL_NOISE, GLSL_DETAIL_NOISE);
@@ -388,8 +389,8 @@ export function injectShaderChunks(material: THREE.Material, options: ShaderChun
     const body: string[] = [];
     if (detail) {
       body.push(
-        `  float scDetail = sc_detailNoise(${U_WORLD_POS}, ${U_CHUNK_SCALE}.value) - 0.5;`,
-        `  diffuseColor.rgb *= 1.0 + scDetail * 0.25 * ${U_CHUNK_STRENGTH}.value;`,
+        `  float scDetail = sc_detailNoise(${U_WORLD_POS}, ${U_CHUNK_SCALE}) - 0.5;`,
+        `  diffuseColor.rgb *= 1.0 + scDetail * 0.25 * ${U_CHUNK_STRENGTH};`,
       );
     }
     if (panel) {
@@ -397,19 +398,19 @@ export function injectShaderChunks(material: THREE.Material, options: ShaderChun
       // by the silhouette; a proper triplanar needs derivatives this material
       // does not guarantee.
       body.push(
-        `  float scPanel = sc_panelLine(${U_WORLD_POS}.xz, ${U_CHUNK_SCALE}.value, 0.02);`,
-        `  diffuseColor.rgb *= 1.0 - 0.35 * scPanel * ${U_CHUNK_STRENGTH}.value;`,
+        `  float scPanel = sc_panelLine(${U_WORLD_POS}.xz, ${U_CHUNK_SCALE}, 0.02);`,
+        `  diffuseColor.rgb *= 1.0 - 0.35 * scPanel * ${U_CHUNK_STRENGTH};`,
       );
     }
     if (fresnel) {
       body.push(
-        `  float scRim = sc_fresnel(normalize(-vViewPosition), normal, ${U_FRESNEL_POWER}.value) * ${U_CHUNK_STRENGTH}.value;`,
-        `  totalEmissiveRadiance += ${U_RIM_COLOR}.value * scRim * 1.5;`,
+        `  float scRim = sc_fresnel(normalize(-vViewPosition), normal, ${U_FRESNEL_POWER}) * ${U_CHUNK_STRENGTH};`,
+        `  totalEmissiveRadiance += ${U_RIM_COLOR} * scRim * 1.5;`,
       );
     }
     if (emissive) {
       body.push(
-        `  totalEmissiveRadiance = sc_emissiveScan(totalEmissiveRadiance, ${U_RIM_COLOR}.value, ${U_TIME}.value * ${U_CHUNK_STRENGTH}.value);`,
+        `  totalEmissiveRadiance = sc_emissiveScan(totalEmissiveRadiance, ${U_RIM_COLOR}, ${U_TIME} * ${U_CHUNK_STRENGTH});`,
       );
     }
 
