@@ -81,6 +81,14 @@ export class LobbyClient {
     this.transport.onMessage((msg) => this.onMessage(msg));
     this.transport.onStateChange((state) => {
       if (state === "connected") this.subscribe();
+      // `CableTransport` clears its whole subscription set when a socket
+      // closes, because the server forgets them too and they are re-sent on the
+      // next welcome. Caching `subscribed` across that would make the next
+      // `subscribe()` a no-op on a transport that holds no lobby subscription
+      // at all, so every `lobby:*` message afterwards fails with
+      // "no lobby subscription". The flag means "subscribed on the *current*
+      // connection", so it has to be cleared whenever that connection ends.
+      if (state === "closed" || state === "reconnecting") this.subscribed = false;
       this.events.emit("stateChange", state);
     });
     this.transport.onError((err) => this.events.emit("error", { code: "transport_error", message: err.message, fatal: false }));

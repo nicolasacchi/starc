@@ -86,9 +86,6 @@ module Starc
         { "applied" => @applied, "rejected" => @rejected.map(&:to_json_hash) }
       end
 
-      def as_json(*)
-        to_json_hash
-      end
     end
   end
 end

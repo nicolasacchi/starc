@@ -35,12 +35,6 @@ module Starc
         !@splash_radius.nil? && @splash_radius.positive? && !@splash_pct.nil?
       end
 
-      def distance_to(x, y)
-        dx = x - @x
-        dy = y - @y
-        Math.sqrt((dx * dx) + (dy * dy))
-      end
-
       def advance(dx, dy, dz)
         @x += dx
         @y += dy

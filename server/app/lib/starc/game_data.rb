@@ -79,25 +79,8 @@ module Starc
         data.fetch("starting_resources")
       end
 
-      def attackable?(key)
-        attack(key).is_a?(Hash) && attack(key)["damage"].to_f.positive?
-      end
-
-      def can_attack_air?(key)
-        targets = attack(key) && attack(key)["targets"]
-        targets.is_a?(Array) && targets.include?("air")
-      end
-
       def is_air?(key)
         def_for(key)&.fetch("movement", nil) == "air"
-      end
-
-      # Races in fixed rotation for a lobby of `n` players.
-      def races_for_players(n)
-        order = races.map { |r| r["race"] }
-        raise ArgumentError, "n must be positive" unless n.is_a?(Integer) && n.positive?
-
-        Array.new(n) { |i| order[i % order.size] }
       end
 
       def data

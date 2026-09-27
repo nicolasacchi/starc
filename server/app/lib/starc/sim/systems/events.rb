@@ -17,10 +17,6 @@ module Starc
           nil
         end
 
-        # How many events are waiting to be read.
-        def self.pending_count(world)
-          world.pending_events.size
-        end
       end
     end
   end

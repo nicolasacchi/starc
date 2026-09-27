@@ -110,19 +110,20 @@ RSpec.describe Starc::GameData do
       NON_COMBATANTS.each do |key|
         expect(data.attack(key)&.fetch("targets", nil)).to be_nil,
                                                    "#{key} must not be able to shoot anything"
-        expect(data.attackable?(key)).to be(false), "#{key} must not be attackable"
       end
+    end
+
+    it "agrees with the hard-coded combatant roster on who can deal damage" do
+      mismatches = data.entities.keys.reject do |k|
+        (data.attack(k)&.fetch("damage", nil).to_f.positive?) == COMBATANTS.include?(k)
+      end
+      expect(mismatches).to be_empty, "combatant roster disagrees for #{mismatches.inspect}"
     end
 
     it "returns nil for buildings outright" do
       buildings = data.entities.select { |_, e| e["kind"] == "building" }.keys
       expect(buildings).not_to be_empty
       buildings.each { |k| expect(data.attack(k)).to be_nil }
-    end
-
-    it "agrees with attackable? on the combatant/non-combatant boundary" do
-      mismatches = data.entities.keys.reject { |k| data.attackable?(k) == COMBATANTS.include?(k) }
-      expect(mismatches).to be_empty, "attackable? disagrees for #{mismatches.inspect}"
     end
   end
 
@@ -139,17 +140,9 @@ RSpec.describe Starc::GameData do
     end
   end
 
-  describe "#can_attack_air?" do
-    it "agrees with the entity's declared targets for all 57 entities" do
-      mismatches = data.entities.keys.reject do |key|
-        targets = data.attack(key)&.fetch("targets", nil)
-        data.can_attack_air?(key) == (targets.is_a?(Array) && targets.include?("air"))
-      end
-      expect(mismatches).to be_empty, "can_attack_air? disagrees for #{mismatches.inspect}"
-    end
-
-    it "is true for exactly the air-capable combatants" do
-      capable = data.entities.keys.select { |k| data.can_attack_air?(k) }
+  describe "air-targeting combatants" do
+    it "gives every air-capable combatant a declared air target" do
+      capable = data.entities.keys.select { |k| Array(data.attack(k)&.fetch("targets", nil)).include?("air") }
       expect(capable).to match_array(AIR_CAPABLE)
     end
   end
@@ -315,18 +308,6 @@ RSpec.describe Starc::GameData do
 
     it "raises when asked for a race that does not exist" do
       expect { data.starting_unit("orc") }.to raise_error(KeyError)
-    end
-  end
-
-  describe "#races_for_players" do
-    it "rotates through the races" do
-      expect(data.races_for_players(4)).to eq(%w[protoss terran zerg protoss])
-    end
-
-    it "rejects a non-positive or non-integer player count" do
-      expect { data.races_for_players(0) }.to raise_error(ArgumentError)
-      expect { data.races_for_players(-1) }.to raise_error(ArgumentError)
-      expect { data.races_for_players("2") }.to raise_error(ArgumentError)
     end
   end
 end

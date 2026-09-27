@@ -123,12 +123,6 @@ module Starc
         @is_building && GEYSER_KEYS.include?(@type_key)
       end
 
-      def dist_to(other)
-        dx = other.x - @x
-        dz = other.z - @z
-        Math.sqrt((dx * dx) + (dz * dz))
-      end
-
       def dist2_to(other)
         dx = other.x - @x
         dz = other.z - @z
@@ -139,12 +133,6 @@ module Starc
         dx = x - @x
         dz = z - @z
         Math.sqrt((dx * dx) + (dz * dz))
-      end
-
-      def in_range_of?(other, range)
-        return true if range.negative?
-
-        dist2_to(other) <= range * range
       end
 
       # --- derived combat / movement values --------------------------------

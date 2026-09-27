@@ -354,10 +354,6 @@ RSpec.describe Starc::Sim::Terrain do
       end
     end
 
-    it "exposes the same water level the passability test uses" do
-      expect(terrain.water_level).to eq(described_class::WATER_LEVEL)
-      expect(terrain.water_level).to eq(0.0)
-    end
   end
 
   describe "bilinear interpolation" do

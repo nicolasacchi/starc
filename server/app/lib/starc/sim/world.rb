@@ -238,17 +238,8 @@ module Starc
         @entities[id]
       end
 
-      def alive_entity(id)
-        e = @entities[id]
-        e if e&.alive?
-      end
-
       def living
         @living
-      end
-
-      def living_count
-        @living.size
       end
 
       def each_living(&block)
@@ -285,10 +276,6 @@ module Starc
         return false if a.nil? || b.nil? || a == b
 
         !allies?(a, b)
-      end
-
-      def state_of(entity)
-        @player_state[entity.player_id]
       end
 
       # Public player accounting, in exactly the shape the channel and the
@@ -404,12 +391,6 @@ module Starc
         out
       end
 
-      # What one player can spend, in the same units as the wire's `res`.
-      def balance_for(player_id)
-        st = @player_state[player_id]
-        st ? (st[:minerals] + st[:vespene]).to_i : 0
-      end
-
       # --- spawning ---------------------------------------------------------
 
       def next_entity_id
@@ -490,10 +471,6 @@ module Starc
         profile = build_weapon_profile(key, entity)
         @weapon_cache[key] = profile || false
         profile
-      end
-
-      def combat_capable?(entity)
-        !weapon_for(entity).nil?
       end
 
       # Ground units, air units and structures are three separate target
@@ -690,15 +667,6 @@ module Starc
         st[:minerals] -= minerals
         st[:vespene] -= vespene
         true
-      end
-
-      def gain(player_id, minerals, vespene = 0)
-        st = @player_state[player_id]
-        return nil if st.nil?
-
-        st[:minerals] += minerals
-        st[:vespene] += vespene
-        st
       end
 
       def note_unit_built(player_id)

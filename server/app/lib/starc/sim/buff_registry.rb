@@ -16,9 +16,6 @@ module Starc
         cloak blink web slow reveal spawn
       ].freeze
 
-      # Effects that change movement speed. `speed_boost` is a multiplier
-      # (>1), `slow`/`web` is a multiplier (<1); both stack multiplicatively.
-      SPEED_EFFECTS = %w[speed_boost slow web].freeze
       # Effects that re-apply damage/heal/shield on a cadence.
       TICKING_EFFECTS = %w[damage heal shield].freeze
       # Effects that are purely passive while their buff is up.
@@ -116,10 +113,6 @@ module Starc
 
       def ticking?(ability_key)
         TICKING_EFFECTS.include?(effect(ability_key).to_s)
-      end
-
-      def speed_effect?(ability_key)
-        SPEED_EFFECTS.include?(effect(ability_key).to_s)
       end
 
       def passive?(ability_key)

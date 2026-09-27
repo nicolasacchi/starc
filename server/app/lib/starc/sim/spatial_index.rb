@@ -98,26 +98,6 @@ module Starc
         out
       end
 
-      # All entities inside the axis-aligned rectangle (inclusive bounds).
-      def query_rect(x0, z0, x1, z1, except_id = nil)
-        return [] if @count.zero?
-
-        min_x = x0 < x1 ? x0 : x1
-        max_x = x0 < x1 ? x1 : x0
-        min_z = z0 < z1 ? z0 : z1
-        max_z = z0 < z1 ? z1 : z0
-        out = []
-        each_cell_covering(min_x, min_z, max_x, max_z) do |cell|
-          cell.each do |e|
-            next if except_id && e.id == except_id
-            next if e.x < min_x || e.x > max_x || e.z < min_z || e.z > max_z
-
-            out << e
-          end
-        end
-        out
-      end
-
       # Iterate the cells overlapping a box. Degenerate boxes (r <= 0) visit
       # exactly the one cell containing the point.
       def each_cell_covering(min_x, min_z, max_x, max_z)

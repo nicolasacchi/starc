@@ -52,18 +52,11 @@ module Starc
         array[int(array.size)]
       end
 
-      def chance(probability)
-        next_float < probability
-      end
-
       # Range sampling, shared by the opening placement.
       def range(lo, hi)
         lo + (hi - lo) * next_float
       end
 
-      def fork(salt)
-        self.class.new((@state ^ (salt.to_i * PHI32)) & MASK)
-      end
     end
   end
 end

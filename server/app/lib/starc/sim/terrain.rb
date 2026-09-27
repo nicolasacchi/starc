@@ -39,12 +39,6 @@ module Starc
           cache[id] ||= new(Starc::Maps.find(id) || raise(ArgumentError, "unknown map #{id.inspect}"))
         end
 
-        def for_map(map)
-          id = map["id"] || map[:id]
-          cache = (@cache ||= {})
-          cache[id.to_s] ||= new(map)
-        end
-
         def cached?(map_id)
           !!(@cache && @cache.key?(map_id.to_s))
         end
@@ -87,14 +81,6 @@ module Starc
 
       def passable?(x, z)
         height_at(x, z) > WATER_LEVEL
-      end
-
-      def water_level
-        WATER_LEVEL
-      end
-
-      def air_altitude
-        AIR_ALTITUDE
       end
 
       # Surface normal from central differences — [x, y, z], normalised, y up.
