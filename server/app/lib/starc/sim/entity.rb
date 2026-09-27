@@ -333,6 +333,12 @@ module Starc
         h["n"] = @train_queue.size unless @train_queue.nil? || @train_queue.empty?
         mask = buff_mask(tick)
         h["b"] = mask unless mask.zero?
+        # A production building's rally point, so the client can draw the flag.
+        # Omitted when unset, per the snapshot's elide-at-defaults rule.
+        unless @rally_x.nil?
+          h["rx"] = round3(@rally_x)
+          h["rz"] = round3(@rally_z)
+        end
         h
       end
 

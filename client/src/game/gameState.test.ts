@@ -43,9 +43,9 @@ function start(over: Partial<StartMessage> = {}): StartMessage {
     snapshot_rate: 10,
     countdown_ms: 3_000,
     players: [
-      { player_id: ME, slot: 0, race: "terran", name: "me", team: 0, start: { x: 10, y: 10 } },
-      { player_id: ALLY, slot: 1, race: "zerg", name: "ally", team: 0, start: { x: 12, y: 10 } },
-      { player_id: ENEMY, slot: 2, race: "protoss", name: "foe", team: 1, start: { x: 200, y: 200 } },
+      { player_id: ME, slot: 0, race: "terran", name: "me", team: 0, start: { x: 10, z: 10 } },
+      { player_id: ALLY, slot: 1, race: "zerg", name: "ally", team: 0, start: { x: 12, z: 10 } },
+      { player_id: ENEMY, slot: 2, race: "protoss", name: "foe", team: 1, start: { x: 200, z: 200 } },
     ],
     ...over,
   };
@@ -208,7 +208,7 @@ describe("GameState economy", () => {
   it("keeps the attributed split summing back to the echoed balance", () => {
     state.applySnapshot(snapshot(1, [entity(1, { ty: "scv", res: 500 })]));
     state.applySnapshot(snapshot(2, [entity(1, { ty: "scv", res: 650 })], [
-      { e: "res", pl: ME, amount: 50, x: 0, y: 0 },
+      { e: "res", pl: ME, amount: 50, x: 0, z: 0 },
     ]));
 
     // Growth the delivery events do not explain is geyser income; the two

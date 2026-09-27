@@ -26,6 +26,19 @@ export type EventHandler<TPayload> = (payload: TPayload) => void;
  */
 export type EventMap = object;
 
+/**
+ * Surfaces a listener that threw without letting it escape `emit`. The socket
+ * message pump calls `emit`, so an uncaught throw there would tear down the
+ * whole connection and every other listener with it.
+ */
+function reportHandlerError(type: string, err: unknown): void {
+  if (typeof console !== "undefined" && typeof console.error === "function") {
+    console.error(`[starc] listener for "${type}" threw`, err);
+  }
+}
+
+
+
 /** Returned by `on`/`once`; safe to call more than once. */
 export type Unsubscribe = () => void;
 
@@ -84,7 +97,13 @@ export class TypedEmitter<M extends EventMap> {
     const set = this.handlers.get(type);
     if (!set || set.size === 0) return;
     for (const handler of set) {
-      (handler as EventHandler<M[K]>)(payload);
+      // One throwing listener must not abort delivery to the rest, nor
+      // rethrow out of the socket's message pump and take down the connection.
+      try {
+        (handler as EventHandler<M[K]>)(payload);
+      } catch (err) {
+        reportHandlerError(type, err);
+      }
     }
   }
 

@@ -39,7 +39,7 @@ interface Slot {
 export function orderCommand(entityId: number, order: QueuedOrder, queue = false): Command {
   switch (order.c) {
     case "move":
-      return { c: "move", ids: [entityId], x: order.x, y: order.y, queue };
+      return { c: "move", ids: [entityId], x: order.x, z: order.z, queue };
     case "attack":
       return { c: "attack", ids: [entityId], target_id: order.target_id, queue };
     case "stop":
@@ -47,13 +47,21 @@ export function orderCommand(entityId: number, order: QueuedOrder, queue = false
     case "hold":
       return { c: "hold", ids: [entityId] };
     case "patrol":
-      return { c: "patrol", ids: [entityId], x: order.x, y: order.y, x2: order.x2, y2: order.y2, queue };
+      return {
+        c: "patrol",
+        ids: [entityId],
+        x: order.x,
+        z: order.z,
+        x2: order.x2,
+        z2: order.z2,
+        queue,
+      };
     case "train":
       return { c: "train", building_id: entityId, unit_type: order.unit_type, count: order.count ?? 1 };
     case "build":
-      return { c: "build", worker_id: entityId, unit_type: order.unit_type, x: order.x, y: order.y };
+      return { c: "build", worker_id: entityId, unit_type: order.unit_type, x: order.x, z: order.z };
     case "rally":
-      return { c: "rally", building_id: entityId, x: order.x, y: order.y };
+      return { c: "rally", building_id: entityId, x: order.x, z: order.z };
     case "harvest":
       return { c: "harvest", worker_id: entityId };
     case "ability":
@@ -71,7 +79,8 @@ export class OrderQueue {
     return [...this.slots.keys()].sort((a, b) => a - b);
   }
 
-  get size(): number {
+  /** How many entities hold any order at all. */
+  get entityCount(): number {
     return this.slots.size;
   }
 

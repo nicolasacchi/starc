@@ -83,6 +83,29 @@ const FLASH_MS = 320;
 /** Which part of the HUD a rejection code should light up. */
 type FlashRegion = "resources" | "command" | "selection";
 
+/**
+ * Where a rejection flash lands, per region: the resource bar bottom right,
+ * the command card bottom centre, or the middle of the viewport.
+ */
+const FLASH_BOX: Record<FlashRegion, { cssText: string }> = {
+  resources: {
+    cssText:
+      "position:absolute;right:1.5%;bottom:16%;width:22%;height:9%;pointer-events:none;" +
+      "border:2px solid #ff5f56;border-radius:4px;box-shadow:0 0 18px rgba(255,95,86,0.6);",
+  },
+  command: {
+    cssText:
+      "position:absolute;left:50%;bottom:2%;width:34%;height:16%;transform:translateX(-50%);" +
+      "pointer-events:none;border:2px solid #ffb648;border-radius:4px;box-shadow:0 0 18px rgba(255,182,72,0.55);",
+  },
+  selection: {
+    cssText:
+      "position:absolute;left:50%;top:50%;width:44%;height:34%;transform:translate(-50%,-50%);" +
+      "pointer-events:none;border:2px solid #3fd8ff;border-radius:6px;box-shadow:0 0 18px rgba(63,216,255,0.5);",
+  },
+};
+
+
 /** The camera surface the scene exposes (`RtsCamera`). */
 interface CameraControls {
   focus(x: number, z: number, worldHeight: number): void;
@@ -1001,6 +1024,42 @@ export class App implements UiHost {
       });
     }
     minimap.setBlips(blips);
+    const rect = this.viewportRect();
+    if (rect) minimap.setViewport(rect);
+  }
+
+  /**
+   * The world rectangle the camera can see, found by unprojecting the four
+   * canvas corners through the ground plane. Corners that miss the ground
+   * (looking at the sky) are skipped; fewer than two survivors means there is
+   * no rectangle worth drawing, so the last one stands.
+   */
+  private viewportRect(): { x: number; z: number; w: number; h: number } | null {
+    const canvas = this.canvas;
+    const scene = this.scene;
+    if (!canvas || !scene) return null;
+    const bounds = canvas.getBoundingClientRect();
+    if (bounds.width < 2 || bounds.height < 2) return null;
+    const out = { x: 0, z: 0 };
+    let minX = Number.POSITIVE_INFINITY;
+    let minZ = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxZ = Number.NEGATIVE_INFINITY;
+    let hits = 0;
+    for (const corner of [
+      [0, 0],
+      [bounds.width, 0],
+      [0, bounds.height],
+      [bounds.width, bounds.height],
+    ]) {
+      if (!scene.screenToGround(bounds.left + corner[0], bounds.top + corner[1], out)) continue;
+      hits++;
+      if (out.x < minX) minX = out.x;
+      if (out.x > maxX) maxX = out.x;
+      if (out.z < minZ) minZ = out.z;
+      if (out.z > maxZ) maxZ = out.z;
+    }
+    return hits < 2 ? null : { x: minX, z: minZ, w: maxX - minX, h: maxZ - minZ };
   }
 
   /**
@@ -1145,13 +1204,20 @@ export class App implements UiHost {
     }
   }
 
-  /** Lights the affordance a rejection code refers to, for a moment. */
+  /**
+   * Lights the affordance a rejection code refers to, for a moment. The box is
+   * positioned over the HUD region the code implicates, so "not enough
+   * minerals" flashes the resource bar and a bad entity id flashes the
+   * viewport. Styling lives here because the overlay is ours, not the HUD's.
+   */
   private flash(region: FlashRegion): void {
     const layer = this.flashLayer;
     const win = this.win;
     if (!layer || !win) return;
+    const box = FLASH_BOX[region];
     layer.dataset.region = region;
-    layer.style.display = "";
+    layer.style.cssText = box.cssText;
+    layer.style.display = "block";
     if (this.flashTimer !== null) win.clearTimeout(this.flashTimer);
     this.flashTimer = win.setTimeout(() => {
       this.flashTimer = null;

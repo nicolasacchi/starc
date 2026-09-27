@@ -3,8 +3,8 @@
  * player's hand into protocol commands; it owns no state the server owns.
  *
  * Conventions:
- *  - Ground space is `{x, z}` (render space). A protocol entity's `y` is that
- *    `z`, and its `z` is the height — `groundPoint` does the translation.
+ *  - The ground plane is `{x, z}` and height is `y` — the same axes the wire,
+ *    the renderer and the camera already use. No translation happens here.
  *  - The selection box is stored as one fixed world corner plus the cursor's
  *    live client position, and re-projected on every read. Panning the camera
  *    mid-drag therefore moves the box with the world instead of smearing it.
@@ -605,10 +605,10 @@ export class InputController {
     }
     if (e.button !== 0 && e.button !== 2) return;
 
-    this.beginDrag(e);
+    const drag = this.beginDrag(e);
     if (e.button !== 0) return;
 
-    const hit = this.drag.target;
+    const hit = drag.target;
     if (hit && hit.pl === this.playerId) {
       if (e.shiftKey) this.selection.toggle(hit.id);
       else this.selection.set([hit.id]);
@@ -704,7 +704,7 @@ export class InputController {
     this.hotkeys.handle(event as KeyboardEvent);
   };
 
-  private beginDrag(e: PointerEvent): void {
+  private beginDrag(e: PointerEvent): DragState {
     const point = this.groundAt(e.clientX, e.clientY);
     this.drag = {
       button: e.button,
@@ -721,6 +721,7 @@ export class InputController {
     };
     // Keep receiving moves even when the cursor leaves the canvas.
     (this.pointerTarget ?? this.element).setPointerCapture?.(e.pointerId);
+    return this.drag;
   }
 
   /** A press that never became a drag. */
@@ -750,7 +751,9 @@ export class InputController {
 
   private finishBoxSelect(drag: DragState): void {
     const corners = this.boxCorners(drag);
-    const anchor = drag.target && drag.target.pl === this.playerId ? groundPoint(drag.target) : undefined;
+    if (!corners) return;
+    const anchor =
+      drag.target && drag.target.pl === this.playerId ? groundPoint(drag.target) : undefined;
     const result = this.selection.selectInRect(
       { x0: corners.a.x, z0: corners.a.z, x1: corners.b.x, z1: corners.b.z },
       this.opts.getEntities(),
@@ -778,25 +781,27 @@ export class InputController {
     return { a: drag.world, b };
   }
 
-  /** Right-click: the only context menu StarCraft has. */
+  /**
+   * Right-click: the only context menu StarCraft has. A selected building
+   * turns every right-click into a rally point, which is how a barracks is
+   * told where to send the next marine.
+   */
   private contextOrder(queued: boolean): void {
     const point = this.pointerGround;
     if (!point) return;
     const hit = this.entityAt(point);
-
     if (hit && hit.pl !== this.playerId) {
       this.issueAttack(hit, queued);
       return;
     }
-    if (hit && hasEntityDef(hit.ty) && isBuilding(hit.ty)) {
-      const buildings = this.orderBuildings();
-      if (buildings.length === 0) return;
+    const buildings = this.orderBuildings();
+    if (buildings.length > 0) {
       this.push(
         buildings.map((b) => ({
           c: "rally" as const,
           building_id: b.id,
           x: round2(point.x),
-          y: round2(point.z),
+          z: round2(point.z),
         })),
       );
       return;
@@ -827,7 +832,7 @@ export class InputController {
     this.lastPatrol = point;
     return this.sendOrder(
       units,
-      { c: "move", x: round2(point.x), y: round2(point.z) },
+      { c: "move", x: round2(point.x), z: round2(point.z) },
       queued,
     );
   }
@@ -846,9 +851,9 @@ export class InputController {
     return this.sendOrder(units, {
       c: "patrol",
       x: round2(from.x),
-      y: round2(from.z),
+      z: round2(from.z),
       x2: round2(to.x),
-      y2: round2(to.z),
+      z2: round2(to.z),
     });
   }
 
@@ -923,7 +928,7 @@ export class InputController {
         worker_id: worker.id,
         unit_type: ghost.unitType,
         x: round2(ghost.x),
-        y: round2(ghost.z),
+        z: round2(ghost.z),
       },
     ]);
     this.cancelPlacement();
@@ -1155,11 +1160,6 @@ export class InputController {
     );
   }
 
-  private isAliveOwn(id: number): boolean {
-    return this.opts.getEntities().some(
-      (e) => e.id === id && e.st !== "dead" && e.pl === this.playerId,
-    );
-  }
 
   private groundOf(id: number): WorldPoint | null {
     const e = this.opts.getEntities().find((candidate) => candidate.id === id);
@@ -1174,7 +1174,7 @@ export class InputController {
     const clusters = this.opts.mineralFields;
     if (!clusters) return false;
     return clusters.some(
-      (c) => Math.hypot(c.x - point.x, c.y - point.z) <= MINERAL_FIELD_RADIUS,
+      (c) => Math.hypot(c.x - point.x, c.z - point.z) <= MINERAL_FIELD_RADIUS,
     );
   }
 

@@ -42,8 +42,11 @@ export interface InterpolatedEntity {
   id: number;
   ty: string;
   pl: number;
+  /** Ground-plane X, straight off the wire. */
   x: number;
+  /** World height — the server's authoritative Y, never recomputed locally. */
   y: number;
+  /** Ground-plane second axis (three.js Z), straight off the wire. */
   z: number;
   ang: number;
   hp: number;
@@ -56,8 +59,9 @@ export interface InterpolatedEntity {
   /** Current target entity id, 0 for none. */
   tid: number;
   ord: OrderKind;
+  /** Current order destination on the ground plane. */
   ox: number;
-  oy: number;
+  oz: number;
   prog: number;
   cargo: number;
   res: number;
@@ -197,7 +201,7 @@ export class Interpolator {
       const step = Math.min(Math.max(ahead, 0), this.maxExtrapolationMs);
       out.extrapolatedMs = step;
       out.reliability = false;
-      this.continueFrom(previous, older, step, out);
+      this.continueFrom(previous, older, step);
     }
     return out;
   }
@@ -273,7 +277,7 @@ export class Interpolator {
     for (const id of this.pool.keys()) if (!seen.has(id)) this.pool.delete(id);
   }
 
-  private continueFrom(previous: BufferedSnapshot | null, newest: BufferedSnapshot, stepMs: number, out: WorldSample): void {
+  private continueFrom(previous: BufferedSnapshot | null, newest: BufferedSnapshot, stepMs: number): void {
     const seen = this.seen;
     seen.clear();
     for (const [id, to] of newest.entities) {

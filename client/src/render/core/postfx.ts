@@ -362,7 +362,7 @@ export class PostFXPipeline {
     (uniforms.uSunPosition.value as THREE.Vector2).set(x, y);
     uniforms.uSunVisible.value = visible ? 1 : 0;
     uniforms.uSunDepth.value = Number.isFinite(depth) ? depth : 1e6;
-    if (this.camera.isPerspectiveCamera) {
+    if (this.camera instanceof THREE.PerspectiveCamera) {
       uniforms.uCameraNear.value = this.camera.near;
       uniforms.uCameraFar.value = this.camera.far;
     }

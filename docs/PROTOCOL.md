@@ -191,6 +191,7 @@ the client may drop prediction history at or below it.
   "tid": 0,               // current target entity id, 0 = none
   "ord": 0,               // 0 = none, else 1 move / 2 attack / 3 harvest / 4 patrol
   "ox": 0.0, "oz": 0.0,   // order destination
+  "rx": 40.0, "rz": 40.0,   // rally point, omitted when unset
   "prog": 0.0,            // construction / production progress 0..1
   "cargo": 0,             // resource units carried
   "res": 200,             // player resources (only on the player's own workers)
@@ -220,7 +221,7 @@ text. They are never replayed for interpolation.
 { "e": "hit",   "id": 101, "tid": 550, "dmg": 9, "crit": false, "shield": false }
 { "e": "death", "id": 550, "ty": "zealot", "x": 44, "z": 12, "y": 0.4, "killer": 101 }
 { "e": "built", "id": 200, "ty": "barracks", "x": 35, "z": 30, "y": 0 }
-{ "e": "proj",  "id": 9001, "ty": "bullet", "x": 1, "z": 2, "y": 3, "tx": 4, "tz": 5, "ty": 6 }
+{ "e": "proj",  "id": 9001, "pk": "bullet", "x": 1, "z": 2, "y": 3, "tx": 4, "tz": 5, "ty": 6 }
 { "e": "ability", "id": 550, "ab": "stimpack", "x": 1, "z": 2, "y": 3 }
 { "e": "res",   "pl": 7, "amount": 15, "x": 1, "z": 2 }
 { "e": "alert", "text": "Under attack" }

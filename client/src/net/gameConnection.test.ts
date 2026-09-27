@@ -162,7 +162,7 @@ function startMessage(countdownMs = 0): GameStartMessage {
     tick_rate: 20,
     snapshot_rate: 10,
     countdown_ms: countdownMs,
-    players: [{ player_id: ME, slot: 0, race: "terran", name: "me", team: 0, start: { x: 0, y: 0 } }],
+    players: [{ player_id: ME, slot: 0, race: "terran", name: "me", team: 0, start: { x: 0, z: 0 } }],
   };
 }
 
@@ -227,8 +227,8 @@ describe("GameConnection", () => {
       await connection.connect(MATCH);
       connection.start();
 
-      connection.send([{ c: "move", ids: [1], x: 10, y: 10 }]);
-      connection.send([{ c: "move", ids: [2], x: 20, y: 20 }]);
+      connection.send([{ c: "move", ids: [1], x: 10, z: 10 }]);
+      connection.send([{ c: "move", ids: [2], x: 20, z: 20 }]);
       connection.tick(16);
 
       // Dropping them is a click that visibly does nothing.
@@ -259,7 +259,7 @@ describe("GameConnection", () => {
 
       const errors: string[] = [];
       connection.onError((e) => errors.push(e.code));
-      connection.send([{ c: "move", ids: [1], x: 1, y: 1 }]);
+      connection.send([{ c: "move", ids: [1], x: 1, z: 1 }]);
 
       expect(errors).toEqual(["not_started"]);
       expect(transport.batches).toHaveLength(0);
@@ -274,9 +274,9 @@ describe("GameConnection", () => {
     });
 
     it("coalesces everything issued in one frame into a single batch", async () => {
-      connection.send([{ c: "move", ids: [1], x: 10, y: 10 }]);
-      connection.send([{ c: "move", ids: [2], x: 20, y: 20 }]);
-      connection.send([{ c: "move", ids: [3], x: 30, y: 30 }]);
+      connection.send([{ c: "move", ids: [1], x: 10, z: 10 }]);
+      connection.send([{ c: "move", ids: [2], x: 20, z: 20 }]);
+      connection.send([{ c: "move", ids: [3], x: 30, z: 30 }]);
       connection.tick(16);
 
       // One message per command burns the 20 Hz budget three times over and
@@ -286,12 +286,12 @@ describe("GameConnection", () => {
     });
 
     it("merges move orders that share a destination into one command", async () => {
-      connection.send([{ c: "move", ids: [1], x: 10, y: 10 }]);
-      connection.send([{ c: "move", ids: [2, 3], x: 10, y: 10 }]);
+      connection.send([{ c: "move", ids: [1], x: 10, z: 10 }]);
+      connection.send([{ c: "move", ids: [2, 3], x: 10, z: 10 }]);
       connection.tick(16);
 
       // A 200-unit order should cost one command, not two hundred.
-      expect(transport.batches[0]!.commands).toEqual([{ c: "move", ids: [1, 2, 3], x: 10, y: 10 }]);
+      expect(transport.batches[0]!.commands).toEqual([{ c: "move", ids: [1, 2, 3], x: 10, z: 10 }]);
     });
 
     it("keeps orders to different destinations apart", () => {
@@ -317,7 +317,7 @@ describe("GameConnection", () => {
       connection.onError((e) => errors.push(e.code));
       const ids = Array.from({ length: 300 }, (_, i) => i + 1);
 
-      connection.send([{ c: "move", ids, x: 5, y: 5 }]);
+      connection.send([{ c: "move", ids, x: 5, z: 5 }]);
       connection.tick(16);
 
       expect(transport.batches[0]!.commands[0]).toMatchObject({ ids: ids.slice(0, MAX_IDS_PER_COMMAND) });
@@ -325,7 +325,7 @@ describe("GameConnection", () => {
     });
 
     it("drops a command whose ids are all nonsense", () => {
-      connection.send([{ c: "move", ids: [0, -3, 1.5], x: 5, y: 5 }]);
+      connection.send([{ c: "move", ids: [0, -3, 1.5], x: 5, z: 5 }]);
       connection.tick(16);
       expect(transport.batches).toHaveLength(0);
     });
@@ -452,7 +452,7 @@ describe("GameConnection", () => {
 
     it("moves a predicted unit before the server has seen the order", () => {
       transport.emit(snapshotMessage(1, [entity(1, { x: 0 })]));
-      connection.send([{ c: "move", ids: [1], x: 100, y: 0 }]);
+      connection.send([{ c: "move", ids: [1], x: 100, z: 0 }]);
       connection.tick(100);
 
       const view = connection.sampleWorld().entities.get(1);
@@ -463,7 +463,7 @@ describe("GameConnection", () => {
 
     it("resynchronises after a reconnect so no pre-drop entity survives", async () => {
       transport.emit(snapshotMessage(1, [entity(1, { x: 0 }), entity(2, { x: 5 })]));
-      connection.send([{ c: "move", ids: [1], x: 100, y: 0 }]);
+      connection.send([{ c: "move", ids: [1], x: 100, z: 0 }]);
       connection.tick(100);
       expect(connection.sampleWorld().entities.size).toBe(2);
 

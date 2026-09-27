@@ -38,7 +38,13 @@ export function createRenderer(canvas: HTMLCanvasElement, preset: QualityPreset)
   renderer.autoClear = true;
 
   renderer.shadowMap.enabled = settings.shadowMapSize > 0;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // PCFShadowMap, not PCFSoftShadowMap. In three 0.186 `shadowMapTypeDefines`
+  // only defines PCF and VSM, so PCFSoftShadowMap emits no define at all and
+  // the shader falls through to the single-tap BASIC path: hard shadows, and
+  // `shadow.radius` ignored. PCF is a 5-tap Vogel disk with hardware PCF (20
+  // effective taps) and per-pixel interleaved-gradient rotation, driven by
+  // `shadow.radius` — which is both softer and cheaper to control.
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.shadowMap.autoUpdate = true;
 
   renderer.info.autoReset = true;
@@ -52,3 +58,14 @@ export function createRenderer(canvas: HTMLCanvasElement, preset: QualityPreset)
  * displays — a browser zoom or a monitor switch changes the ratio without a
  * resize event ever firing.
  */
+
+export function syncRendererSize(
+  renderer: THREE.WebGLRenderer,
+  canvas: HTMLCanvasElement,
+  settings: { pixelRatioCap: number },
+): void {
+  // Node and some headless contexts have no `devicePixelRatio`; fall back to 1.
+  const dpr = typeof devicePixelRatio === "number" && devicePixelRatio > 0 ? devicePixelRatio : 1;
+  renderer.setPixelRatio(Math.min(dpr, settings.pixelRatioCap));
+  renderer.setSize(canvas.clientWidth || canvas.width, canvas.clientHeight || canvas.height, false);
+}

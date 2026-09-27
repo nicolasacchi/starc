@@ -7,11 +7,11 @@
  * minimap), feeds views from network snapshots, and exposes one surface to
  * the game layer.
  *
- * ## Coordinate mapping (important)
- * `ProtocolEntity` is *not* three-axis-ordered: the server serialises
- * `"x" => @x, "y" => @z, "z" => @z_world`, so `x` and `y` are the ground plane
- * and `z` is the world height. Every snapshot entity and every game event is
- * mapped through {@link toWorld} before it reaches a view or a VFX system.
+ * ## Coordinate mapping
+ * The wire uses the three.js axes: the ground plane is `x`/`z` and `y` is the
+ * server's authoritative height, which is never recomputed from the client
+ * height field. Every snapshot entity is read through {@link readWorld}; the
+ * height field is only used for ground decals, VFX grounding and picking.
  *
  * ## Interpolation
  * `applySnapshot` keeps the two most recent snapshots. `update()` advances a
@@ -107,10 +107,15 @@ interface WorldPoint {
   z: number;
 }
 
-/** Wire axes → three.js: `y` is ground depth on the wire, `z` is the height. */
-function setWorld(entity: ProtocolEntity, out: WorldPoint): void {
+/**
+ * Wire axes are now the three.js axes: the ground plane is `x`/`z` and `y` is
+ * the server's authoritative height, so the mapping is the identity. This
+ * helper stays as the single place to read a `ProtocolEntity`'s position, so
+ * a future protocol change has exactly one edit to make.
+ */
+function readWorld(entity: ProtocolEntity, out: WorldPoint): void {
   out.x = entity.x;
-  out.y = entity.z;
+  out.y = entity.y;
   out.z = entity.z;
 }
 
@@ -381,7 +386,7 @@ export class SceneManager {
   issueMove(entityIds: readonly number[], x: number, z: number): void {
     if (this.disposed || entityIds.length === 0) return;
     const ids = [...entityIds];
-    const command: Command = { c: "move", ids, x, y: z };
+    const command: Command = { c: "move", ids, x, z };
     this.onCommand?.(command);
   }
 
@@ -619,12 +624,12 @@ export class SceneManager {
       const current = this.newer.get(view.id);
       if (current === undefined) continue;
       const previous = this.older.get(view.id);
-      setWorld(current, this.worldTo);
+      readWorld(current, this.worldTo);
       if (previous === undefined) {
         view.setTransform(this.worldTo.x, this.worldTo.y, this.worldTo.z, current.ang);
         continue;
       }
-      setWorld(previous, this.worldFrom);
+      readWorld(previous, this.worldFrom);
       const to = this.worldTo;
       const from = this.worldFrom;
       const blend = phase <= 1 ? phase : 1;

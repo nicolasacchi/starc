@@ -63,7 +63,7 @@ describe("MovementPredictor", () => {
 
   it("never exceeds its speed however many ticks are requested at once", () => {
     predictor.applySnapshot(snap(1, [entity(1)]));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 500, y: 0 }], 1);
+    predictor.queueCommand([{ c: "move", ids: [1], x: 500, z: 0 }], 1);
 
     predictor.update(8); // the per-frame catch-up ceiling
 
@@ -73,13 +73,13 @@ describe("MovementPredictor", () => {
 
   it("stops exactly on the order destination instead of oscillating around it", () => {
     predictor.applySnapshot(snap(1, [entity(1)]));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 3, y: 4 }], 1);
+    predictor.queueCommand([{ c: "move", ids: [1], x: 3, z: 4 }], 1);
 
     for (let i = 0; i < 200 && predictor.predicted(1)!.order; i++) predictor.update(1);
     const unit = predictor.predicted(1)!;
 
     expect(unit.x).toBeCloseTo(3, 6);
-    expect(unit.y).toBeCloseTo(4, 6);
+    expect(unit.z).toBeCloseTo(4, 6);
     expect(unit.order).toBeNull();
     expect(unit.orderKind).toBe(0);
     expect(unit.st).toBe("idle");
@@ -94,7 +94,7 @@ describe("MovementPredictor", () => {
 
   it("clamps a destination outside the world to the map edge", () => {
     predictor.applySnapshot(snap(1, [entity(1)]));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 5_000, y: 5_000 }], 1);
+    predictor.queueCommand([{ c: "move", ids: [1], x: 5_000, z: 5_000 }], 1);
     for (let i = 0; i < 400 && predictor.predicted(1)!.order; i++) predictor.update(1);
 
     const unit = predictor.predicted(1)!;
@@ -105,18 +105,18 @@ describe("MovementPredictor", () => {
 
   it("starts walking on the click, before the server has seen anything", () => {
     predictor.applySnapshot(snap(10, [entity(1)], 10));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 50, y: 0 }], 10);
+    predictor.queueCommand([{ c: "move", ids: [1], x: 50, z: 0 }], 10);
 
     const unit = predictor.predicted(1)!;
-    expect(unit.order).toEqual({ x: 50, y: 0 });
+    expect(unit.order).toEqual({ x: 50, z: 0 });
     expect(unit.st).toBe("moving");
   });
 
   it("drops only the batches the server has acknowledged", () => {
     predictor.applySnapshot(snap(0, [entity(1)]));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 1, y: 0 }], 10, "a");
-    predictor.queueCommand([{ c: "move", ids: [1], x: 2, y: 0 }], 12, "b");
-    predictor.queueCommand([{ c: "move", ids: [1], x: 3, y: 0 }], 15, "c");
+    predictor.queueCommand([{ c: "move", ids: [1], x: 1, z: 0 }], 10, "a");
+    predictor.queueCommand([{ c: "move", ids: [1], x: 2, z: 0 }], 12, "b");
+    predictor.queueCommand([{ c: "move", ids: [1], x: 3, z: 0 }], 15, "c");
     expect(predictor.pendingCount()).toBe(3);
 
     predictor.acknowledge(12);
@@ -128,7 +128,7 @@ describe("MovementPredictor", () => {
 
   it("keeps predicting toward a local order the server has not confirmed", () => {
     predictor.applySnapshot(snap(10, [entity(1, { x: 0 })], 10));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 50, y: 0 }], 10);
+    predictor.queueCommand([{ c: "move", ids: [1], x: 50, z: 0 }], 10);
     predictor.update(4);
     expect(predictor.predicted(1)!.x).toBeGreaterThan(0);
 
@@ -136,7 +136,7 @@ describe("MovementPredictor", () => {
     // click must survive the re-base.
     predictor.applySnapshot(snap(11, [entity(1, { x: 0, ord: 0 })], 9));
     const unit = predictor.predicted(1)!;
-    expect(unit.order).toEqual({ x: 50, y: 0 });
+    expect(unit.order).toEqual({ x: 50, z: 0 });
     predictor.update(1);
     // The unit must still be walking after the snapshot re-based it onto the
     // server's stale position.
@@ -146,11 +146,11 @@ describe("MovementPredictor", () => {
 
   it("adopts the server's order once the local batch is acknowledged", () => {
     predictor.applySnapshot(snap(10, [entity(1)], 10));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 50, y: 0 }], 10);
+    predictor.queueCommand([{ c: "move", ids: [1], x: 50, z: 0 }], 10);
     predictor.acknowledge(10);
 
-    predictor.applySnapshot(snap(11, [entity(1, { ord: 1, ox: 12, oy: 0 })], 11));
-    expect(predictor.predicted(1)!.order).toEqual({ x: 12, y: 0 });
+    predictor.applySnapshot(snap(11, [entity(1, { ord: 1, ox: 12, oz: 0 })], 11));
+    expect(predictor.predicted(1)!.order).toEqual({ x: 12, z: 0 });
   });
 
   it("requests a correction when the server disagrees by more than the threshold", () => {
@@ -198,14 +198,14 @@ describe("MovementPredictor", () => {
 
   it("does not move a dead unit", () => {
     predictor.applySnapshot(snap(1, [entity(1, { st: "dead" as EntityState })]));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 50, y: 0 }], 1);
+    predictor.queueCommand([{ c: "move", ids: [1], x: 50, z: 0 }], 1);
     predictor.update(10);
     expect(predictor.predicted(1)!.x).toBe(0);
   });
 
   it("clears the order when the player hits stop", () => {
     predictor.applySnapshot(snap(1, [entity(1)]));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 50, y: 0 }], 1);
+    predictor.queueCommand([{ c: "move", ids: [1], x: 50, z: 0 }], 1);
     predictor.queueCommand([{ c: "stop", ids: [1] }], 2);
 
     const unit = predictor.predicted(1)!;
@@ -226,7 +226,7 @@ describe("MovementPredictor", () => {
 
   it("keeps predicting after a long stall by bounding the catch-up", () => {
     predictor.applySnapshot(snap(1, [entity(1)]));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 1_000, y: 0 }], 1);
+    predictor.queueCommand([{ c: "move", ids: [1], x: 1_000, z: 0 }], 1);
     predictor.update(1_000);
     // One long frame must not spin the main thread for a thousand steps.
     expect(predictor.predicted(1)!.x).toBeLessThanOrEqual(MARINE_SPEED * 0.4 + 1e-9);
@@ -234,7 +234,7 @@ describe("MovementPredictor", () => {
 
   it("reset forgets units, pending batches and the correction flag", () => {
     predictor.applySnapshot(snap(10, [entity(1, { x: 0 })], 10));
-    predictor.queueCommand([{ c: "move", ids: [1], x: 9, y: 0 }], 10);
+    predictor.queueCommand([{ c: "move", ids: [1], x: 9, z: 0 }], 10);
     predictor.applySnapshot(snap(11, [entity(1, { x: 50 })], 11));
 
     predictor.reset();
@@ -245,7 +245,7 @@ describe("MovementPredictor", () => {
   });
 
   it("keeps working when the destination is already reached", () => {
-    predictor.applySnapshot(snap(1, [entity(1, { x: 5, y: 5 })]));
+    predictor.applySnapshot(snap(1, [entity(1, { x: 5, z: 5 })]));
     const unit = predictor.predicted(1)! as PredictedUnit;
     const moved = predictor.predictMove(unit, 5, 5, TICK_MS);
     expect(moved).toBe(0);

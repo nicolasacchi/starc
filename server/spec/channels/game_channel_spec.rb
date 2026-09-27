@@ -93,6 +93,24 @@ RSpec.describe GameChannel do
     create(:session, player: player)
   end
 
+  # Alerts the runner has broadcast on the match's own stream, waiting out the
+  # 2-tick snapshot cadence that carries them.
+  def snapshot_alerts(timeout: 2.0)
+    stream = Starc::LobbyRegistry.game_stream(@alert_match_id)
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+    loop do
+      alerts = ActionCable.server.pubsub.broadcasts(stream).filter_map do |raw|
+        message = JSON.parse(JSON.parse(raw))
+        next unless message["t"] == "game:snapshot"
+        Array(message["events"]).select { |e| e["e"] == "alert" }
+      end.flatten
+      return alerts unless alerts.empty?
+      break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+
+      sleep 0.02
+    end
+  end
+
   # --- identify before anything else ----------------------------------------
 
   describe "a command before identify" do
@@ -225,7 +243,7 @@ RSpec.describe GameChannel do
       expect(players.map { |p| p["team"] }).to contain_exactly(1, 2)
       expect(players.map { |p| p["slot"] }).to contain_exactly(0, 1)
       players.each do |entry|
-        expect(entry["start"]).to include("x" => be_a(Numeric), "y" => be_a(Numeric))
+        expect(entry["start"]).to include("x" => be_a(Numeric), "z" => be_a(Numeric))
       end
     end
 
@@ -304,7 +322,7 @@ RSpec.describe GameChannel do
       clear_messages
 
       perform_action("t" => "game:command", "from_tick" => 0,
-                     "commands" => [{ "c" => "move", "ids" => [999_999], "x" => 5, "y" => 5 }])
+                     "commands" => [{ "c" => "move", "ids" => [999_999], "x" => 5, "z" => 5 }])
 
       reject = last_of("game:reject")
       expect(reject).to be_present
@@ -359,15 +377,17 @@ RSpec.describe GameChannel do
   describe "unsubscribed" do
     it "tells the runner a player dropped, so a forfeit countdown starts" do
       match = running_match
+      @alert_match_id = match.id
       subscribe_as(one, match.id)
       runner = Starc::MatchRunner.for(match.id)
       expect(runner).not_to be_nil
 
       unsubscribe
 
-      # The alert the runner raises on a disconnect carries the grace period.
-      alerts = runner.world.drain_events.select { |e| e["e"] == "alert" }
-      expect(alerts.join).to include(one.name)
+      # The alert rides out on the next `game:snapshot`, which the tick loop
+      # publishes every 2nd tick, so the spec waits for the broadcast rather
+      # than reaching into the runner.
+      expect(snapshot_alerts.map { |a| a["text"] }).to include(a_string_including(one.name))
     end
 
     it "does not tear the match down: the game channel owns the running match" do

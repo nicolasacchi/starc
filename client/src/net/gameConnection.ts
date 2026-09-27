@@ -440,11 +440,10 @@ export class GameConnection {
       case "lobby:state":
         // The lobby client owns this; the game screen ignores it.
         break;
-      default: {
-        const line = chatLineOf(msg);
-        if (line) this.events.emit("chat", line);
+      case "lobby:chat":
+        // The backlog plus any new line, so a late joiner renders in one go.
+        for (const line of msg.lines) this.events.emit("chat", line);
         break;
-      }
     }
   }
 
@@ -571,7 +570,7 @@ export class GameConnection {
         (candidate): candidate is Extract<Command, { c: "move" }> =>
           candidate.c === "move" &&
           candidate.x === command.x &&
-          candidate.y === command.y &&
+          candidate.z === command.z &&
           (candidate.queue ?? false) === queue &&
           candidate.ids.length + command.ids.length <= this.maxIdsPerCommand,
       );
@@ -670,7 +669,7 @@ export class GameConnection {
       const view = sample.entities.get(id);
       if (!view) continue;
       view.x = unit.x;
-      view.y = unit.y;
+      view.z = unit.z;
       view.ang = unit.ang;
       view.st = unit.st;
     }
@@ -753,20 +752,3 @@ function ownPlayerId(msg: GameStartMessage): number | null {
   return msg.players.length === 1 ? msg.players[0].player_id : null;
 }
 
-/**
- * Chat arrives as `lobby:chat` carrying a `LobbyChatLine`, either wrapped in a
- * `line` field or spread over the envelope. It is not part of the typed
- * `ServerMessage` union, so it is read structurally.
- */
-function chatLineOf(msg: ServerMessage): LobbyChatLine | null {
-  const record = msg as unknown as Record<string, unknown>;
-  if (record.t !== "lobby:chat") return null;
-  const source = (record.line ?? record) as Partial<LobbyChatLine>;
-  if (typeof source.text !== "string") return null;
-  return {
-    player_id: typeof source.player_id === "number" ? source.player_id : 0,
-    name: typeof source.name === "string" ? source.name : "",
-    text: source.text,
-    ts: typeof source.ts === "number" ? source.ts : 0,
-  };
-}

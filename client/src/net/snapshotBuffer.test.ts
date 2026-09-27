@@ -70,7 +70,7 @@ describe("SnapshotBuffer", () => {
   });
 
   it("atOrBefore returns null when the tick predates every retained snapshot", () => {
-    const buffer = filled(5, 3); // retains ticks 2..4
+    const buffer = filled(12, 8); // retains ticks 4..11
     // Clamping a pre-window tick *forward* to the newest snapshot would hand the
     // caller the future; the interpolation path has to be able to tell "nothing
     // that old is left" apart from a real answer.

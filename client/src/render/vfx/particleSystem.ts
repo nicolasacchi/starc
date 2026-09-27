@@ -353,7 +353,9 @@ void main() {
   float spin = aMotion.z * age;
   float cs = cos( spin );
   float sn = sin( spin );
-  vec2 corner = mat2( cs, -sn, sn, cs ) * position.xy * size;
+  // The unit quad's corners span -0.5..0.5, so doubling turns the size
+  // attribute into the radius the rest of the renderer means by width.
+  vec2 corner = mat2( cs, -sn, sn, cs ) * position.xy * size * 2.0;
 
   vec4 view = modelViewMatrix * vec4( world, 1.0 );
   vViewDistance = -view.z;

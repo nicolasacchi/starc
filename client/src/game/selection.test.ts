@@ -47,7 +47,7 @@ describe("groundPoint and normaliseRect", () => {
   it("maps a protocol entity's ground axes to the renderer's x/z pair", () => {
     // The protocol's y is the renderer's z; getting this backwards mirrors the
     // selection about the map diagonal.
-    expect(groundPoint(entity(1, { x: 3, y: 7 }))).toEqual({ x: 3, z: 7 });
+    expect(groundPoint(entity(1, { x: 3, z: 7 }))).toEqual({ x: 3, z: 7 });
   });
 
   it("normalises a rectangle dragged in any direction", () => {
@@ -73,10 +73,10 @@ describe("SelectionManager", () => {
 
   it("keeps only the entities whose centre is inside the dragged box", () => {
     const entities = [
-      entity(1, { x: 5, y: 5 }),
-      entity(2, { x: 9, y: 9 }),
-      entity(3, { x: 12, y: 5 }), // outside on x
-      entity(4, { x: 5, y: 11 }), // outside on the ground axis
+      entity(1, { x: 5, z: 5 }),
+      entity(2, { x: 9, z: 9 }),
+      entity(3, { x: 12, z: 5 }), // outside on x
+      entity(4, { x: 5, z: 11 }), // outside on the ground axis
     ];
 
     const result = selection.selectInRect({ x0: 0, z0: 0, x1: 10, z1: 10 }, entities, FRIENDLY);
@@ -104,8 +104,8 @@ describe("SelectionManager", () => {
   });
 
   it("excludes units beyond the drag distance cap from the anchor", () => {
-    const anchor = entity(1, { x: 50, y: 50 });
-    const near = entity(2, { x: 60, y: 50 });
+    const anchor = entity(1, { x: 50, z: 50 });
+    const near = entity(2, { x: 60, z: 50 });
     const far = entity(3, { x: 50 + DRAG_SELECT_RADIUS + 1, y: 50 });
     const entities = [anchor, near, far];
 
@@ -121,7 +121,7 @@ describe("SelectionManager", () => {
 
   it("measures the distance cap from the rectangle centre when no anchor is given", () => {
     // The rect centre is (50, 50); the second unit sits just past the cap.
-    const entities = [entity(1, { x: 50, y: 50 }), entity(2, { x: 50 + DRAG_SELECT_RADIUS + 1, y: 50 })];
+    const entities = [entity(1, { x: 50, z: 50 }), entity(2, { x: 50 + DRAG_SELECT_RADIUS + 1, y: 50 })];
 
     const result = selection.selectInRect(
       { x0: 0, z0: 0, x1: 100, z1: 100 },
@@ -180,11 +180,11 @@ describe("SelectionManager", () => {
 
   it("selects every visible unit of the anchor's type on a double-click", () => {
     const entities = [
-      entity(1, { x: 1, y: 1 }),
-      entity(2, { x: 40, y: 40 }),
-      entity(3, { x: 200, y: 200 }), // off screen
-      entity(4, { ty: "zealot", x: 5, y: 5 }), // a different type
-      entity(5, { ty: "marine", pl: 2, x: 6, y: 6 }), // the enemy's
+      entity(1, { x: 1, z: 1 }),
+      entity(2, { x: 40, z: 40 }),
+      entity(3, { x: 200, z: 200 }), // off screen
+      entity(4, { ty: "zealot", x: 5, z: 5 }), // a different type
+      entity(5, { ty: "marine", pl: 2, x: 6, z: 6 }), // the enemy's
     ];
     const visible = (x: number) => x < 100;
 

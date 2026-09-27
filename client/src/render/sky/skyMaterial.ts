@@ -170,7 +170,7 @@ uniform float uStarIntensity;
 const float SKY_PI = 3.141592653589793;
 const vec3 SKY_MIE_CONST = vec3( 1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14 );
 
-// `uTime` is deliberately NOT declared here: the water and the cloud shader
+// \`uTime\` is deliberately NOT declared here: the water and the cloud shader
 // both include this block and declare their own clock, and a second
 // declaration of the same uniform in one shader is a compile error. They all
 // read the same uniform object, so one clock still drives all three.
@@ -209,9 +209,9 @@ float scSunExtinction( float cosSunZenith ) {
 }
 
 /**
- * In-scattered radiance along `dir`, in the same units as `uSunIntensity`.
+ * In-scattered radiance along \`dir\`, in the same units as \`uSunIntensity\`.
  *
- * `sR`/`sM` are path LENGTHS through the atmosphere (scale height times air
+ * \`sR\`/\`sM\` are path LENGTHS through the atmosphere (scale height times air
  * mass), not optical depths: the optical depth is beta * length, and getting
  * that order wrong squares a number around 1e-5 and renders the sky black.
  */
@@ -244,7 +244,7 @@ vec3 scSkyRadiance( vec3 dir ) {
 
 /**
  * The sun's disc: the real 0.53 degree angular diameter, the Hestroffer-Magnan
- * limb-darkening law, and an aureole. `uSunDiscColor` already carries the map's
+ * limb-darkening law, and an aureole. \`uSunDiscColor\` already carries the map's
  * own sun hue and the extinction along the sun's own path, so the disc reddens
  * at sunset exactly as fast as the key light does.
  */

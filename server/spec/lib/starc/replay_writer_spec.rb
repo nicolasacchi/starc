@@ -11,7 +11,7 @@ RSpec.describe Starc::ReplayWriter do
   let(:match) { create(:match, :in_progress) }
 
   def wire_move(ids: [101], **rest)
-    { "c" => "move", "ids" => ids, "x" => 40.5, "y" => 12.25, "queue" => false }.merge(rest.transform_keys(&:to_s))
+    { "c" => "move", "ids" => ids, "x" => 40.5, "z" => 12.25, "queue" => false }.merge(rest.transform_keys(&:to_s))
   end
 
   describe "#record" do
@@ -39,7 +39,7 @@ RSpec.describe Starc::ReplayWriter do
       expect(entry["c"]).to eq("move")
       expect(entry["ids"]).to eq([101])
       expect(entry["x"]).to eq(40.5)
-      expect(entry["y"]).to eq(12.25)
+      expect(entry["z"]).to eq(12.25)
       expect(entry["queue"]).to be(true)
       expect(entry["extra_note"]).to eq("hi")
     end
@@ -47,7 +47,7 @@ RSpec.describe Starc::ReplayWriter do
     it "records exactly the stamp plus the command's own keys, nothing invented" do
       entry = writer.record(tick: 1, player_id: 7, index: 0, command: { "c" => "stop", "ids" => [5] })
 
-      expect(entry.keys.sort).to eq(%w[c index ids player_id tick])
+      expect(entry.keys.sort).to eq(%w[c ids index player_id tick])
     end
 
     it "does not let a client-supplied index clobber the recorded batch position" do

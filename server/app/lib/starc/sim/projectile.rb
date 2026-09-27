@@ -58,9 +58,11 @@ module Starc
 
       def to_event_hash
         {
-          "e" => "proj", "id" => @id, "ty" => @weapon,
-          "x" => round3(@x), "y" => round3(@y), "z" => round3(@z),
-          "tx" => round3(@tx), "ty2" => round3(@ty), "tz" => round3(@tz)
+          # `pk` is the weapon kind, so `ty` can stay the target height and
+          # `tz` the target ground axis, matching `shot`.
+          "e" => "proj", "id" => @id, "pk" => @weapon,
+          "x" => round3(@x), "z" => round3(@y), "y" => round3(@z),
+          "tx" => round3(@tx), "tz" => round3(@ty), "ty" => round3(@tz)
         }
       end
 

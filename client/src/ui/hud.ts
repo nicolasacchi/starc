@@ -95,7 +95,7 @@ export class Hud {
   mount(root: HTMLElement): void {
     const doc = docOf(root);
     const hud = el(doc, "div", "hud");
-    hud.dataset.race = this.children.race ?? "terran";
+    hud.dataset.race = this.children.race;
 
     /* Resource bar ------------------------------------------------------ */
     const resources = el(doc, "header", "hud__resources panel");

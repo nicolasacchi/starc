@@ -819,7 +819,9 @@ RSpec.describe LobbyChannel do
 
       perform_action("t" => "identify", "token" => session.token)
 
-      expect(announced_you(host)).to include("player_id" => host.id, "is_host" => true)
+      # `identify` answers on the subscription itself, not on the player's
+      # stream: the tab that just identified gets its state right back.
+      expect(last_state["you"]).to include("player_id" => host.id, "is_host" => true)
     end
 
     it "lets the newly identified player act straight away" do

@@ -94,14 +94,14 @@ describe("Interpolator", () => {
 
   it("spawns an entity that appears between snapshots at the newer position", () => {
     buffer.push(snap(0, []));
-    buffer.push(snap(1, [entity(7, { x: 40, y: 12 })]));
+    buffer.push(snap(1, [entity(7, { x: 40, z: 12 })]));
 
     interpolator.sample(T0 + 50, sample);
     const view = sample.entities.get(7)!;
     // Fading in from the origin instead would show every spawned unit sliding
     // across the map from (0, 0).
     expect(view.x).toBe(40);
-    expect(view.y).toBe(12);
+    expect(view.z).toBe(12);
     expect(view.present).toBe(true);
     expect(sample.spawnIds).toEqual([7]);
     expect(sample.despawnIds).toEqual([]);

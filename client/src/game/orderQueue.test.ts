@@ -8,9 +8,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { MAX_QUEUED_ORDERS, OrderQueue, orderCommand } from "./orderQueue";
 import type { QueuedOrder } from "./orderQueue";
 
-const A: QueuedOrder = { c: "move", x: 10, y: 10 };
-const B: QueuedOrder = { c: "move", x: 20, y: 20 };
-const C: QueuedOrder = { c: "move", x: 30, y: 30 };
+const A: QueuedOrder = { c: "move", x: 10, z: 10 };
+const B: QueuedOrder = { c: "move", x: 20, z: 20 };
+const C: QueuedOrder = { c: "move", x: 30, z: 30 };
 const ATTACK: QueuedOrder = { c: "attack", target_id: 99 };
 
 describe("OrderQueue", () => {
@@ -40,7 +40,7 @@ describe("OrderQueue", () => {
   it("rejects the seventh queued order, matching the server's queue_full", () => {
     queue.push(1, A);
     for (let i = 0; i < MAX_QUEUED_ORDERS; i++) {
-      expect(queue.push(1, { c: "move", x: i + 1, y: i + 1 })).toBe("queued");
+      expect(queue.push(1, { c: "move", x: i + 1, z: i + 1 })).toBe("queued");
     }
     expect(queue.isFull(1)).toBe(true);
     expect(queue.push(1, B)).toBe("rejected");
@@ -118,8 +118,8 @@ describe("OrderQueue", () => {
   });
 
   it("folds the entity id back into the wire command", () => {
-    expect(orderCommand(7, A)).toEqual({ c: "move", ids: [7], x: 10, y: 10, queue: false });
-    expect(orderCommand(7, A, true)).toEqual({ c: "move", ids: [7], x: 10, y: 10, queue: true });
+    expect(orderCommand(7, A)).toEqual({ c: "move", ids: [7], x: 10, z: 10, queue: false });
+    expect(orderCommand(7, A, true)).toEqual({ c: "move", ids: [7], x: 10, z: 10, queue: true });
     expect(orderCommand(7, ATTACK)).toEqual({ c: "attack", ids: [7], target_id: 99, queue: false });
   });
 

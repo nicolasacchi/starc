@@ -215,7 +215,10 @@ function gridTexture(size: number, anisotropy: number): THREE.DataTexture {
 }
 
 const TINTS: Readonly<Record<DecalKind, number>> = { scorch: 0xffffff, blood: 0xd8b0b0 };
-const ATLAS_OFFSET: Readonly<Record<DecalKind, number>> = { scorch: 0.5, blood: 0 };
+// A DataTexture has flipY off, so data row 0 samples at v = 0: scorch occupies
+// the first half of the atlas and blood the second.
+const ATLAS_OFFSET: Readonly<Record<DecalKind, number>> = { scorch: 0, blood: 0.5 };
+
 /** Zerg ichor, for `splatter`. */
 const ICHOR_TINT = 0x9fd05a;
 

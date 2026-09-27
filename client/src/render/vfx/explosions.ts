@@ -448,7 +448,7 @@ export class ExplosionSystem {
     }
 
     this.launchDebris(position, groundY, spec, scale);
-    if (spec.scorch > 0) this.decals.scorch(position.x, position.z, scale * spec.scorch);
+    if (spec.scorch > 0) this.decals.scorch(position, scale * spec.scorch);
   }
 
   /** Steps the debris only; the other layers run on the GPU. */

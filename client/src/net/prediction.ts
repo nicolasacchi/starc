@@ -33,10 +33,10 @@ import type { Command, EntityState, OrderKind, ProtocolEntity } from "@shared/pr
 import { entityDef, hasEntityDef } from "@shared/gameData";
 import type { Snapshot } from "./snapshotBuffer";
 
-/** Where a predicted unit is heading. */
+/** Where a predicted unit is heading, on the ground plane (x/z). */
 export interface PendingOrder {
   x: number;
-  y: number;
+  z: number;
 }
 
 /** A batch the server has not acknowledged yet. */
@@ -51,9 +51,12 @@ export interface UnacknowledgedCommand {
 export interface PredictedUnit {
   id: number;
   ty: string;
+  /** Ground-plane X. */
   x: number;
-  y: number;
+  /** Ground-plane Z — the wire's second ground axis (three.js Z). */
   z: number;
+  /** World height. The server owns this; prediction never recomputes it. */
+  y: number;
   ang: number;
   /** Server-reported health, carried through so the HUD need not re-read. */
   hp: number;
@@ -89,14 +92,14 @@ export interface MovementPredictorOptions {
  * can hand its cached field straight in without the netcode importing three.js.
  */
 export interface TerrainProbe {
-  passable(x: number, y: number): boolean;
-  sample(x: number, y: number): number;
+  passable(x: number, z: number): boolean;
+  sample(x: number, z: number): number;
 }
 
 export const DEFAULT_SNAP_THRESHOLD_M = 1.25;
 export const DEFAULT_PENDING_BATCHES = 64;
 export const DEFAULT_PENDING_TIMEOUT_MS = 3000;
-/** PROTOCOL.md §4: the world is 0 ≤ x, y < 256. */
+/** PROTOCOL.md §4: the world is 0 ≤ x, z < 256. */
 const PROTOCOL_WORLD_SIZE = 256;
 /** Arrival tolerance, in metres, before a unit is considered stopped. */
 const ARRIVAL_EPSILON = 0.02;
@@ -153,19 +156,19 @@ export class MovementPredictor {
    * Advances `unit` toward `(x, y)` by at most `speed * dt`, returns the
    * distance actually covered, and clears the order on arrival. Allocation-free.
    */
-  predictMove(unit: PredictedUnit, x: number, y: number, dt: number): number {
+  predictMove(unit: PredictedUnit, x: number, z: number, dt: number): number {
     const stepSeconds = Math.max(0, dt) / 1000;
     if (stepSeconds <= 0) return 0;
     const maxStep = Math.max(0, unit.speed) * stepSeconds;
 
     const targetX = clamp(x, 0, this.worldSize);
-    const targetY = clamp(y, 0, this.worldSize);
+    const targetZ = clamp(z, 0, this.worldSize);
     const dx = targetX - unit.x;
-    const dy = targetY - unit.y;
-    const distance = Math.hypot(dx, dy);
+    const dz = targetZ - unit.z;
+    const distance = Math.hypot(dx, dz);
     if (distance <= ARRIVAL_EPSILON) {
       unit.x = targetX;
-      unit.y = targetY;
+      unit.z = targetZ;
       unit.order = null;
       unit.orderKind = 0;
       unit.st = "idle";
@@ -175,10 +178,10 @@ export class MovementPredictor {
 
     const inv = 1 / distance;
     const ux = dx * inv;
-    const uy = dy * inv;
+    const uz = dz * inv;
     const travel = Math.min(maxStep, distance);
-    const moved = this.advance(unit, ux * travel, uy * travel, unit.air);
-    unit.ang = Math.atan2(uy, ux);
+    const moved = this.advance(unit, ux * travel, uz * travel, unit.air);
+    unit.ang = Math.atan2(uz, ux);
     if (moved > ARRIVAL_EPSILON) {
       unit.st = "moving";
       unit.stalledTicks = 0;
@@ -212,7 +215,7 @@ export class MovementPredictor {
     // The order applies whether or not the server has already seen the tick:
     // the player clicked, and the unit should be moving now.
     for (const command of commands) {
-      if (command.c === "move") this.issueMove(command.ids, command.x, command.y);
+      if (command.c === "move") this.issueMove(command.ids, command.x, command.z);
       else if (command.c === "stop" || command.c === "hold") this.issueStop(command.ids);
     }
     return batch;
@@ -267,13 +270,13 @@ export class MovementPredictor {
         this.units.set(entity.id, this.unitFromServer(entity));
         continue;
       }
-      const error = Math.hypot(unit.x - entity.x, unit.y - entity.y);
+      const error = Math.hypot(unit.x - entity.x, unit.z - entity.z);
       if (error > this.lastErrorMetres) this.lastErrorMetres = error;
 
       // Re-base on the server's authoritative position; local orders survive.
       unit.x = entity.x;
-      unit.y = entity.y;
       unit.z = entity.z;
+      unit.y = entity.y;
       unit.hp = entity.hp;
       unit.ang = entity.ang;
       unit.st = entity.st;
@@ -306,7 +309,7 @@ export class MovementPredictor {
     for (let s = 0; s < steps; s++) {
       for (const unit of this.units.values()) {
         if (!unit.order || unit.st === "dead") continue;
-        this.predictMove(unit, unit.order.x, unit.order.y, TICK_MS);
+        this.predictMove(unit, unit.order.x, unit.order.z, TICK_MS);
       }
     }
   }
@@ -323,13 +326,13 @@ export class MovementPredictor {
 
   /* ------------------------------------------------------------- internals */
 
-  private issueMove(ids: number[], x: number, y: number): void {
+  private issueMove(ids: number[], x: number, z: number): void {
     const targetX = clamp(x, 0, this.worldSize);
-    const targetY = clamp(y, 0, this.worldSize);
+    const targetZ = clamp(z, 0, this.worldSize);
     for (const id of ids) {
       const unit = this.units.get(id);
       if (!unit || unit.st === "dead") continue;
-      unit.order = { x: targetX, y: targetY };
+      unit.order = { x: targetX, z: targetZ };
       unit.orderKind = 1;
       unit.st = "moving";
     }
@@ -367,35 +370,37 @@ export class MovementPredictor {
     }
   }
 
-  private advance(unit: PredictedUnit, dx: number, dy: number, air: boolean): number {
+  private advance(unit: PredictedUnit, dx: number, dz: number, air: boolean): number {
     // Air units ignore the ground probe; ground units slide along whichever
     // axis is still passable, and stop dead when neither is.
-    const candidates: [number, number][] = [[dx, dy], [dx, 0], [0, dy]];
-    for (const [mx, my] of candidates) {
-      if (air && (mx !== dx || my !== dy)) continue;
-      if (mx === 0 && my === 0) continue;
+    const candidates: [number, number][] = [[dx, dz], [dx, 0], [0, dz]];
+    for (const [mx, mz] of candidates) {
+      if (air && (mx !== dx || mz !== dz)) continue;
+      if (mx === 0 && mz === 0) continue;
       const nx = clamp(unit.x + mx, 0, this.worldSize);
-      const ny = clamp(unit.y + my, 0, this.worldSize);
-      if (!this.canStand(nx, ny, unit.radius, air)) continue;
-      const moved = Math.hypot(nx - unit.x, ny - unit.y);
+      const nz = clamp(unit.z + mz, 0, this.worldSize);
+      if (!this.canStand(nx, nz, unit.radius, air)) continue;
+      const moved = Math.hypot(nx - unit.x, nz - unit.z);
       unit.x = nx;
-      unit.y = ny;
-      if (this.terrain && !air) unit.z = this.terrain.sample(nx, ny);
+      unit.z = nz;
+      // The server owns height; the local field only keeps a predicted unit
+      // glued to the ground between snapshots.
+      if (this.terrain && !air) unit.y = this.terrain.sample(nx, nz);
       return moved;
     }
     return 0;
   }
 
-  private canStand(x: number, y: number, radius: number, air: boolean): boolean {
+  private canStand(x: number, z: number, radius: number, air: boolean): boolean {
     if (air || !this.terrain) return true;
     // A unit is a disc, not a point: probe the centre and all four flanks.
-    if (this.terrain.passable(x, y)) return true;
+    if (this.terrain.passable(x, z)) return true;
     if (radius <= 0) return false;
     return (
-      this.terrain.passable(x + radius, y) ||
-      this.terrain.passable(x - radius, y) ||
-      this.terrain.passable(x, y + radius) ||
-      this.terrain.passable(x, y - radius)
+      this.terrain.passable(x + radius, z) ||
+      this.terrain.passable(x - radius, z) ||
+      this.terrain.passable(x, z + radius) ||
+      this.terrain.passable(x, z - radius)
     );
   }
 
@@ -405,8 +410,8 @@ export class MovementPredictor {
       id: entity.id,
       ty: entity.ty,
       x: entity.x,
-      y: entity.y,
       z: entity.z,
+      y: entity.y,
       ang: entity.ang,
       hp: entity.hp,
       st: entity.st,

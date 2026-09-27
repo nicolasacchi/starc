@@ -217,25 +217,8 @@ export class LobbyClient {
       this.events.emit("error", { code: msg.code, message: msg.message, fatal: msg.fatal });
       return;
     }
-    const line = chatLineOf(msg);
-    if (line) this.events.emit("chat", line);
+    if (msg.t === "lobby:chat") {
+      for (const line of msg.lines) this.events.emit("chat", line);
+    }
   }
-}
-
-/**
- * Chat is not part of the typed `ServerMessage` union, so it is read
- * structurally: `lobby:chat` carries a `LobbyChatLine`, either wrapped in a
- * `line` field or spread over the envelope.
- */
-function chatLineOf(msg: ServerMessage): LobbyChatLine | null {
-  const record = msg as unknown as Record<string, unknown>;
-  if (record.t !== "lobby:chat") return null;
-  const source = (record.line ?? record) as Partial<LobbyChatLine>;
-  if (typeof source.text !== "string") return null;
-  return {
-    player_id: typeof source.player_id === "number" ? source.player_id : 0,
-    name: typeof source.name === "string" ? source.name : "",
-    text: source.text,
-    ts: typeof source.ts === "number" ? source.ts : 0,
-  };
 }

@@ -1,10 +1,10 @@
 /**
  * Selection model — the StarCraft rules, not the Chromium ones.
  *
- * Coordinates: a snapshot entity carries `{x, y, z}` where `z` is terrain
- * height and `y` is the second ground axis (PROTOCOL.md §5). The render layer
- * works in `{x, z}` ground space. `groundPoint` is the one place that mapping
- * happens, so nothing else has to remember it.
+ * Axes: the ground plane is `{x, z}` and height is `y`, the three.js
+ * convention the whole client shares. A snapshot entity already carries ground
+ * coordinates, so `groundPoint` is the identity — it exists so nobody has to
+ * remember which field carries the height.
  */
 import { attackOf, hasEntityDef, isBuilding } from "@shared/gameData";
 import type { ProtocolEntity } from "@shared/protocol";
@@ -67,9 +67,9 @@ export interface SameTypeOptions {
   limit?: number;
 }
 
-/** Protocol ground plane: `x` east, `y` north, `z` up. */
+/** The ground plane is `{x, z}`; an entity's `y` is height, not position. */
 export function groundPoint(e: ProtocolEntity): WorldPoint {
-  return { x: e.x, z: e.y };
+  return { x: e.x, z: e.z };
 }
 
 /** World rectangle with `min`/`max` applied and the map bounds respected. */
@@ -227,7 +227,7 @@ export class SelectionManager {
     const picked: number[] = [];
     for (const e of entities) {
       if (e.st === "dead" || e.ty !== anchor.ty || e.pl !== opts.myPlayerId) continue;
-      if (opts.isVisible && !opts.isVisible(e.x, e.y)) continue;
+      if (opts.isVisible && !opts.isVisible(e.x, e.z)) continue;
       picked.push(e.id);
     }
     return this.apply(picked, opts.additive, opts.limit ?? this.max);

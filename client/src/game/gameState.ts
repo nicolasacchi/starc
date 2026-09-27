@@ -114,7 +114,11 @@ export class GameState {
   }
 
   applySnapshot(snapshot: SnapshotPayload): void {
-    if (!this._started || snapshot.tick < this._tick) return;
+    // `_finished` matters as much as `_started`: a snapshot still in flight
+    // when `game:ended` lands would otherwise revive the world, putting back
+    // entities the server had already removed underneath the results screen.
+    if (!this._started || this._finished) return;
+    if (snapshot.tick < this._tick) return;
 
     this._tick = snapshot.tick;
     this.byId.clear();

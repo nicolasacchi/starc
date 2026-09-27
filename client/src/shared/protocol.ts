@@ -235,6 +235,9 @@ export interface ProtocolEntity {
   ord?: OrderKind;
   ox?: number;
   oz?: number;
+  /** Rally point for a production building, omitted when unset. */
+  rx?: number;
+  rz?: number;
   prog?: number;
   cargo?: number;
   res?: number;
@@ -247,7 +250,8 @@ export type GameEvent =
   | { e: "hit"; id: number; tid: number; dmg: number; crit: boolean; shield: boolean }
   | { e: "death"; id: number; ty: string; x: number; z: number; y: number; killer: number }
   | { e: "built"; id: number; ty: string; x: number; z: number; y: number }
-  | { e: "proj"; id: number; ty: string; x: number; z: number; y: number; tx: number; tz: number; ty: number }
+  /** `pk` is the weapon kind; `ty`/`tz` are the target height/ground axis. */
+  | { e: "proj"; id: number; pk: string; x: number; z: number; y: number; tx: number; tz: number; ty: number }
   | { e: "ability"; id: number; ab: string; x: number; z: number; y: number }
   | { e: "res"; pl: number; amount: number; x: number; z: number }
   | { e: "alert"; text: string };

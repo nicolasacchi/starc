@@ -236,18 +236,6 @@ function disposeShadow(light: THREE.Light): void {
  */
 export class LightingRig {
 
-/** Where the rig publishes itself on the scene. */
-const RIG_KEY = "lightingRig";
-
-/**
- * The lighting rig for a scene, if one has been constructed. The shadow
- * system and the environment probe use this so a caller only has to hand them
- * the scene; pass the rig explicitly if it is not the one on that scene.
- */
-export function lightingRigFor(scene: THREE.Scene): LightingRig | null {
-  const rig = scene.userData[RIG_KEY];
-  return rig instanceof LightingRig ? rig : null;
-}
   /** The map's key light before a {@link ShadowSystem} adopts the slot. */
   readonly sun: THREE.DirectionalLight;
   /** Sky above / ground below bounce. */
@@ -406,5 +394,19 @@ export function lightingRigFor(scene: THREE.Scene): LightingRig | null {
     this.scene.remove(this.keyLight);
     disposeShadow(this.sun);
     if (this.keyLight !== this.sun) disposeShadow(this.keyLight);
+    if (this.scene.userData[RIG_KEY] === this) delete this.scene.userData[RIG_KEY];
   }
+}
+
+/** Where the rig publishes itself on the scene. */
+const RIG_KEY = "lightingRig";
+
+/**
+ * The lighting rig for a scene, if one has been constructed. The shadow system
+ * and the environment probe use this so a caller only has to hand them the
+ * scene; pass the rig explicitly if it is not the one on that scene.
+ */
+export function lightingRigFor(scene: THREE.Scene): LightingRig | null {
+  const rig = scene.userData[RIG_KEY];
+  return rig instanceof LightingRig ? rig : null;
 }

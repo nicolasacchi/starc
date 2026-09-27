@@ -20,6 +20,9 @@ const REBUILD_INTERVAL = 0.25;
 /** Radians of sun travel that force a rebuild. */
 const SUN_MOVEMENT_EPSILON = 0.01;
 
+/** Sky used when the probe is built without a lighting rig. */
+const FALLBACK_STATE = createSunState();
+
 const SKY_VERT = /* glsl */ `
 varying vec3 vDirection;
 void main() {

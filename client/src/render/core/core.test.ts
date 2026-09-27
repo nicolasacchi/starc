@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import {
   QUALITY_PRESETS,
+  QualityPreset,
   detectQuality,
   forcedQuality,
   invalidateQualityCache,
@@ -19,7 +20,7 @@ import { createScene, disposeScene } from "./scene";
 import { GLSL_COLOR, GLSL_FBM, GLSL_HASH, GLSL_NOISE, injectShaderChunks } from "./shaderChunks";
 import { RtsCamera } from "./camera";
 import { GAME } from "@shared/gameData";
-import type { MapDef, QualityPreset } from "@shared/protocol";
+import type { MapDef } from "@shared/protocol";
 
 const map: MapDef = GAME.maps[0];
 
@@ -162,7 +163,7 @@ describe("shader chunks", () => {
   it("injects uniforms and a live update handle into a material", () => {
     const material = new THREE.MeshStandardMaterial();
     const before = material.onBeforeCompile;
-    const handle = injectShaderChunks(material, { emissive: true, fresnel: true, time: true });
+    const handle = injectShaderChunks(material, { emissive: true, fresnel: true });
 
     expect(material.onBeforeCompile).not.toBe(before);
     expect(handle.uniforms.uTime).toBeDefined();
@@ -179,6 +180,20 @@ describe("shader chunks", () => {
     expect(() => handle.dispose()).not.toThrow();
   });
 });
+
+/** V8 heap usage under Node, 0 elsewhere; this test file runs only in Node. */
+function heapUsed(): number {
+  const host: unknown = globalThis;
+  if (typeof host !== "object" || host === null || !("process" in host)) return 0;
+  const proc: unknown = host.process;
+  if (typeof proc !== "object" || proc === null || !("memoryUsage" in proc)) return 0;
+  const usage: unknown = proc.memoryUsage;
+  if (typeof usage !== "function") return 0;
+  const stats: unknown = usage.call(proc);
+  if (typeof stats !== "object" || stats === null || !("heapUsed" in stats)) return 0;
+  const heap: unknown = stats.heapUsed;
+  return typeof heap === "number" ? heap : 0;
+}
 
 describe("RtsCamera", () => {
   const makeCamera = () => {
@@ -247,19 +262,22 @@ describe("RtsCamera", () => {
   });
 
   it("scales shake with trauma squared and decays to nothing", () => {
-    const rts = new RtsCamera(makeCamera(), null, map);
+    // RtsCamera keeps its camera private, so keep the instance we handed it:
+    // it is the same object the class positions every update.
+    const cam = makeCamera();
+    const rts = new RtsCamera(cam, null, map);
 
     // Shake displacement is trauma² × a time-varying wobble, so a single-frame
     // sample measures the phase, not the envelope. Measure the peak over the
     // whole burst instead.
     const peakTrauma = (intensity: number): number => {
-      const resting = rts.camera.position.clone();
+      const resting = cam.position.clone();
       rts.addShake(intensity, 0.25);
       let peak = 0;
       for (let i = 0; i < 40; i++) {
         rts.update(1 / 60);
-        peak = Math.max(peak, rts.camera.position.distanceTo(resting));
-        rts.camera.position.copy(resting);
+        peak = Math.max(peak, cam.position.distanceTo(resting));
+        cam.position.copy(resting);
       }
       return peak;
     };
@@ -276,18 +294,19 @@ describe("RtsCamera", () => {
     expect(violent / gentle).toBeGreaterThan(4);
 
     for (let i = 0; i < 400; i++) rts.update(1 / 60);
-    const settled = rts.camera.position.distanceTo(
-      new THREE.Vector3(rts.focusX, 0, rts.focusZ).setY(rts.camera.position.y),
+    const settled = cam.position.distanceTo(
+      new THREE.Vector3(rts.focusX, 0, rts.focusZ).setY(cam.position.y),
     );
     expect(Number.isFinite(settled)).toBe(true);
     rts.dispose();
   });
 
   it("picks the terrain surface when converting a screen point to ground", () => {
-    const rts = new RtsCamera(makeCamera(), null, map);
+    const cam = makeCamera();
+    const rts = new RtsCamera(cam, null, map);
     rts.focus(128, 128, 0);
     for (let i = 0; i < 300; i++) rts.update(1 / 60);
-    rts.camera.updateMatrixWorld(true);
+    cam.updateMatrixWorld(true);
 
     const out = { x: 0, z: 0 };
     const hit = rts.screenToGround(640, 360, out);
@@ -305,9 +324,9 @@ describe("RtsCamera", () => {
     rts.focus(140, 160, 0);
     for (let i = 0; i < 50; i++) rts.update(1 / 60);
 
-    const before = process.memoryUsage().heapUsed;
+    const before = heapUsed();
     for (let i = 0; i < 5000; i++) rts.update(1 / 60);
-    const growth = process.memoryUsage().heapUsed - before;
+    const growth = heapUsed() - before;
     // 5000 frames of a render loop must not grow the heap meaningfully.
     expect(growth).toBeLessThan(4 * 1024 * 1024);
     rts.dispose();
