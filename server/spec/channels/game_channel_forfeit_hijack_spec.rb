@@ -24,9 +24,14 @@ RSpec.describe GameChannel, "and the connections behind it" do
   # The grace window is a minute in production, which no spec is going to sit
   # through. The countdown is arithmetic on a constant, so shrinking the
   # constant shrinks the wait without changing what is being tested: the point
-  # is whether it arms at all, and each example sits out five times the window.
+  # is whether it arms at all, and each example sits out well over the window.
+  #
+  # The multiplier is generous because these are wall-clock waits on a real
+  # 50 ms tick thread: a bare 1 s sleep was long enough to lose the window
+  # under load and fail intermittently. Waiting longer cannot make a correct
+  # example fail — it only costs wall clock.
   let(:grace_ms) { 200 }
-  let(:settle) { (grace_ms / 1000.0) * 5 }
+  let(:settle) { (grace_ms / 1000.0) * 12 }
 
   let(:one) { create(:player, name: "nik") }
   let(:two) { create(:player, name: "zzy") }
