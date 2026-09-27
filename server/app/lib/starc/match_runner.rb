@@ -101,7 +101,6 @@ module Starc
       @acks = {}
       @disconnect_at = {}
       @pending_events = []
-      @forced_end = nil
       @stopping = false
       @thread = nil
       @replay = ReplayWriter.new(match)
@@ -170,7 +169,7 @@ module Starc
 
       rejected = world_rejections(result, batch[:entries]) + batch[:rejected]
       record_accepted(tick, player_id, batch[:entries], rejected)
-      { applied: value_of(result, "applied").to_i, rejected: rejected }
+      { applied: field_of(result, "applied").to_i, rejected: rejected }
     rescue StandardError => e
       log_error("apply_commands", e)
       { applied: 0, rejected: [{ "index" => 0, "code" => "server_error", "message" => "command could not be applied" }] }
@@ -206,7 +205,8 @@ module Starc
 
     def player_forfeits(player_id)
       push_alert("#{player_name(player_id)} forfeited")
-      force_end(winner: roster.map { |p| p[:id] }.find { |id| id != player_id }, reason: "forfeit")
+      @mutex.synchronize { @world&.forfeit(player_id, "forfeit") }
+      nil
     end
 
     # Clean shutdown (server restart, code reload): stop stepping, let the loop
@@ -250,7 +250,7 @@ module Starc
       # Nothing may escape the loop: a raise here would leave every client
       # waiting on snapshots that will never come.
       log_error("tick loop", e)
-      force_end(winner: nil, reason: "stalemate")
+      end_world(nil, "stalemate")
     ensure
       finalize!
     end
@@ -260,23 +260,19 @@ module Starc
       @mutex.synchronize do
         @world.step!
         expire_forfeits
-        events = Array(@world.drain_events).concat(take_pending_events)
-        payload = snapshot_payload(events) if (@world.tick % SNAPSHOT_EVERY).zero?
+        payload = snapshot_payload if (@world.tick % SNAPSHOT_EVERY).zero?
       end
       broadcast(payload) if payload
     end
 
-    def snapshot_payload(events)
-      {
-        v: 1,
-        t: "game:snapshot",
-        ts: now_ms,
-        tick: @world.tick,
-        server_ms: @world.elapsed_ms,
-        ack: broadcast_ack,
-        entities: value_of(@world.snapshot, "entities") || [],
-        events: events
-      }
+    # The world builds the whole `game:snapshot` envelope and drains its own
+    # events; the runner adds only what the world cannot know — the alerts it
+    # raised, and the acknowledgement for this broadcast.
+    def snapshot_payload
+      snapshot = @world.snapshot(server_ms: now_ms)
+      snapshot["events"] = Array(snapshot["events"]).concat(take_pending_events)
+      snapshot["ack"] = broadcast_ack
+      snapshot
     end
 
     # `ack` is the highest `from_tick` processed for this world. The snapshot is
@@ -340,18 +336,27 @@ module Starc
     # batch minus the commands screened out above; this maps them back onto the
     # indices the client actually sent.
     def world_rejections(result, entries)
-      Array(value_of(result, "rejected")).map do |entry|
-        position = value_of(entry, "index").to_i
+      Array(field_of(result, "rejected")).map do |entry|
+        position = field_of(entry, "index").to_i
         original = entries[position]&.first || position
-        rejection(original, value_of(entry, "code"), value_of(entry, "message"))
+        rejection(original, field_of(entry, "code"), field_of(entry, "message"))
       end
     end
+
+    def rejection(index, code, message)
+      { "index" => index.to_i, "code" => code.to_s, "message" => message.to_s }
+    end
+
+    def inactive
+      { applied: 0, rejected: [rejection(0, "not_ready", "the match is not running")] }
+    end
+
     # Only accepted commands reach the replay (PROTOCOL.md §8): the replay has
     # to reproduce the world, and a command the world refused never happened.
     def record_accepted(tick, player_id, entries, rejected)
       dropped = rejected.each_with_object({}) { |r, set| set[r["index"]] = true }
-      entries.each_with_index do |(index, command), position|
-        next if dropped.key?(position)
+      entries.each do |(index, command)|
+        next if dropped.key?(index)
 
         @replay.record(tick: tick, player_id: player_id, index: index, command: command)
       end
@@ -367,12 +372,15 @@ module Starc
 
     # ---------------------------------------------------------------- endings
 
-    def force_end(winner:, reason:)
-      @mutex.synchronize { @forced_end ||= { winner: winner, reason: reason.to_s } }
+    # The world owns the ending: a forfeit or a stalemate is decided through it,
+    # so the simulation and the match row can never disagree about who won.
+    def end_world(winner, reason)
+      @mutex.synchronize { @world&.finish!(winner, reason.to_s) }
+      nil
     end
 
     def end_result
-      @mutex.synchronize { @forced_end || @world&.finished? }
+      @mutex.synchronize { @world&.finished? }
     end
 
     def expire_forfeits
@@ -383,7 +391,7 @@ module Starc
       return if expired.empty?
 
       expired.each { |player_id| @disconnect_at.delete(player_id) }
-      force_end(winner: roster.map { |p| p[:id] }.find { |id| !expired.include?(id) }, reason: "disconnect")
+      @world.forfeit(expired.first, "disconnect")
     end
 
     def finalize!
@@ -551,8 +559,10 @@ module Starc
       states[player_id] || states[player_id.to_s] || {}
     end
 
+    # The replay's `final_state` is the whole entity table, dead included, not
+    # the living-only table a snapshot carries.
     def final_entities
-      Array(value_of(@world&.snapshot, "entities"))
+      Array(@world&.entity_states)
     end
 
     def current_tick
@@ -617,8 +627,17 @@ module Starc
       hash[key.to_sym]
     end
 
+    # The world answers with a `CommandResult` and `Rejection` structs rather
+    # than hashes, so a field is read through whichever shape arrives.
+    def field_of(object, key)
+      return value_of(object, key) if object.is_a?(Hash)
+      return nil unless object.respond_to?(key)
+
+      object.public_send(key)
+    end
+
     def stat(states, key)
-      value_of(states, key).to_i
+      field_of(states, key).to_i
     end
 
     def log_error(scope, error)

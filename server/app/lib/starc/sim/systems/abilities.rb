@@ -129,7 +129,8 @@ module Starc
           if radius&.positive?
             # An aura: a shield battery keeps topping up everything nearby for
             # as long as the ability is up.
-            world.effects << make_effect(world, caster, key, 0, radius, duration || 0.0, false, caster.x, caster.z)
+            world.effects << make_effect(world, caster, key, 0, radius,
+                                         aura_duration(world, duration), false, caster.x, caster.z)
             return
           end
           target = resolve_target(world, caster, meta["target"])
@@ -141,13 +142,23 @@ module Starc
 
         def self.cast_slow(world, caster, key, meta, duration, radius)
           if radius&.positive?
-            world.effects << make_effect(world, caster, key, 0, radius, duration || 0.0, true, caster.order_x, caster.order_z)
+            world.effects << make_effect(world, caster, key, 0, radius,
+                                         aura_duration(world, duration), true,
+                                         caster.order_x, caster.order_z)
             return
           end
           target = resolve_target(world, caster, meta["target"])
           return if target.nil?
 
           target.apply_buff(key, expiry(world, duration))
+        end
+
+        # An aura with no declared duration still needs to live long enough to
+        # tick at least once; without this it would be born already expired.
+        def self.aura_duration(world, duration)
+          return duration if duration&.positive?
+
+          TICK_INTERVAL_TICKS / world.ticks_per_second
         end
 
         def self.strike(world, caster, key, radius, target_id, x, z)
@@ -183,7 +194,6 @@ module Starc
         # Teleport up to `magnitude` metres toward the order point, clamped to
         # the world and to passable ground for ground units.
         def self.blink(world, caster, meta)
-          reach = world.registry.magnitude(caster.ability_key_for(meta)) if false
           reach = meta["magnitude"].to_f
           dx = caster.order_x - caster.x
           dz = caster.order_z - caster.z
@@ -292,15 +302,17 @@ module Starc
           end
         end
 
-        # Every living entity in the effect's radius, filtered by side.
+        # Every living entity in the effect's radius, filtered by side. An
+        # aura follows its caster: a shield battery keeps covering whoever is
+        # next to the archon right now, not whoever was there when it started.
         def self.aura(world, caster, fx, hostile)
-          x = fx.caster_id.positive? ? world.entity(fx.caster_id)&.x : fx.x
-          z = fx.caster_id.positive? ? world.entity(fx.caster_id)&.z : fx.y
-          x ||= fx.x
-          z ||= fx.y
-          world.index.query_radius(x, z, fx.radius).each do |e|
+          radius = fx.radius
+          return unless radius&.positive?
+
+          world.index.query_radius(caster.x, caster.z, radius).each do |e|
             next unless e.alive?
-            next if hostile ? !world.enemies?(e.player_id, caster.player_id) : !world.allies?(e.player_id, caster.player_id)
+            same_side = world.allies?(e.player_id, caster.player_id)
+            next if hostile ? same_side : !same_side
 
             yield e
           end

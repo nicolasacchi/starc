@@ -25,6 +25,16 @@ const BLOOM_STRENGTH = 0.55;
 const BLOOM_RADIUS = 0.5;
 const BLOOM_THRESHOLD = 0.85;
 
+/**
+ * Calls `dispose()` when the object has one. Several three passes implement it
+ * at runtime without declaring it in @types/three, and EffectComposer declares
+ * one it does not implement, so a structural optional call is the only call
+ * that is both safe and type-clean.
+ */
+function release(pass: object | null): void {
+  (pass as { dispose?: () => void } | null)?.dispose?.();
+}
+
 /* ------------------------------------------------------------------ */
 /* God rays — radial blur toward the sun, masked by occlusion           */
 /* ------------------------------------------------------------------ */
@@ -35,7 +45,7 @@ const BLOOM_THRESHOLD = 0.85;
  * the shafts instead of smearing through it. Dithered start offsets kill the
  * banding that a 24-tap blur otherwise produces.
  */
-const GodRaysShader = {
+export const GodRaysShader = {
   name: "GodRaysShader",
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
@@ -52,8 +62,10 @@ const GodRaysShader = {
     uTime: { value: 0 },
     uAspect: { value: 1.777 },
   },
+  // Both passes are authored as GLSL ES 3.00 and the materials are tagged
+  // `glslVersion: GLSL3` at build time, so WebGL2 compiles them natively.
   vertexShader: /* glsl */ `
-    varying vec2 vUv;
+    out vec2 vUv;
     void main() {
       vUv = uv;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -61,6 +73,11 @@ const GodRaysShader = {
   `,
   fragmentShader: /* glsl */ `
     precision highp float;
+    precision highp int;
+
+    layout(location = 0) out vec4 fragColor;
+
+    in vec2 vUv;
 
     uniform sampler2D tDiffuse;
     uniform sampler2D tDepth;
@@ -77,8 +94,6 @@ const GodRaysShader = {
     uniform float uUseDepth;
     uniform float uTime;
     uniform float uAspect;
-
-    varying vec2 vUv;
 
     const int MAX_SAMPLES = 32;
 
@@ -101,7 +116,7 @@ const GodRaysShader = {
       // noise, which the grade's grain then absorbs.
       float jitter = interleavedGradientNoise(gl_FragCoord.xy + fract(uTime) * 37.0);
 
-      float surfaceDepth = linearDepth(texture2D(tDepth, vUv).x);
+      float surfaceDepth = linearDepth(texture(tDepth, vUv).x);
       float illumination = 1.0;
       float weight = 1.0;
       vec3 shafts = vec3(0.0);
@@ -109,8 +124,8 @@ const GodRaysShader = {
       for (int i = 0; i < MAX_SAMPLES; i++) {
         if (i >= uSamples) break;
         uv -= delta * jitter;
-        vec3 sampled = texture2D(tDiffuse, uv).rgb;
-        float sampleDepth = linearDepth(texture2D(tDepth, uv).x);
+        vec3 sampled = texture(tDiffuse, uv).rgb;
+        float sampleDepth = linearDepth(texture(tDepth, uv).x);
         float brightness = dot(sampled, vec3(0.2126, 0.7152, 0.0722));
 
         // Depth mode: a sample contributes only if it is behind the surface
@@ -131,7 +146,7 @@ const GodRaysShader = {
       vec2 offscreen = max(abs(uSunPosition - 0.5) - 0.5, 0.0);
       float onScreen = uSunVisible * (1.0 - smoothstep(0.0, 0.5, length(offscreen * vec2(uAspect, 1.0))));
 
-      gl_FragColor = vec4(shafts * onScreen, 1.0);
+      fragColor = vec4(shafts * onScreen, 1.0);
     }
   `,
 };
@@ -140,7 +155,7 @@ const GodRaysShader = {
 /* Composite grade — CA + vignette + grain + sharpen, in one pass       */
 /* ------------------------------------------------------------------ */
 
-const CompositeShader = {
+export const CompositeShader = {
   name: "CompositeShader",
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
@@ -155,6 +170,11 @@ const CompositeShader = {
   vertexShader: GodRaysShader.vertexShader,
   fragmentShader: /* glsl */ `
     precision highp float;
+    precision highp int;
+
+    layout(location = 0) out vec4 fragColor;
+
+    in vec2 vUv;
 
     uniform sampler2D tDiffuse;
     uniform vec2 uResolution;
@@ -164,8 +184,6 @@ const CompositeShader = {
     uniform float uSharpen;
     uniform float uSaturation;
     uniform float uTime;
-
-    varying vec2 vUv;
 
     float hash12(vec2 p) {
       vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -182,16 +200,16 @@ const CompositeShader = {
       // lens, so the middle of the screen stays clean.
       vec2 shift = centered * radius2 * uAberration;
       vec3 color;
-      color.r = texture2D(tDiffuse, vUv + shift).r;
-      color.g = texture2D(tDiffuse, vUv).g;
-      color.b = texture2D(tDiffuse, vUv - shift).b;
+      color.r = texture(tDiffuse, vUv + shift).r;
+      color.g = texture(tDiffuse, vUv).g;
+      color.b = texture(tDiffuse, vUv - shift).b;
 
       // Unsharp mask on luminance only: chroma noise is far more visible.
       vec3 blur = (
-        texture2D(tDiffuse, vUv + vec2(texel.x, 0.0)).rgb +
-        texture2D(tDiffuse, vUv - vec2(texel.x, 0.0)).rgb +
-        texture2D(tDiffuse, vUv + vec2(0.0, texel.y)).rgb +
-        texture2D(tDiffuse, vUv - vec2(0.0, texel.y)).rgb
+        texture(tDiffuse, vUv + vec2(texel.x, 0.0)).rgb +
+        texture(tDiffuse, vUv - vec2(texel.x, 0.0)).rgb +
+        texture(tDiffuse, vUv + vec2(0.0, texel.y)).rgb +
+        texture(tDiffuse, vUv - vec2(0.0, texel.y)).rgb
       ) * 0.25;
       vec3 detail = (color - blur) * uSharpen;
       // Only sharpen what is already bright enough to show the difference.
@@ -208,7 +226,7 @@ const CompositeShader = {
       float grain = hash12(gl_FragCoord.xy + fract(uTime) * 511.0) - 0.5;
       color += grain * uGrain * (1.0 - luma * 0.6);
 
-      gl_FragColor = vec4(max(color, vec3(0.0)), 1.0);
+      fragColor = vec4(max(color, vec3(0.0)), 1.0);
     }
   `,
 };
@@ -300,12 +318,14 @@ export class PostFXPipeline {
     this.godRays.uniforms.tDepth.value = this.depthTarget.depthTexture;
     // The pass only produces light: it adds to whatever is already in the
     // buffer instead of replacing it.
+    this.godRays.material.glslVersion = THREE.GLSL3;
     this.godRays.material.blending = THREE.AdditiveBlending;
     this.godRays.material.transparent = true;
     this.composer.addPass(this.godRays);
 
     this.composite = new ShaderPass(CompositeShader);
     this.composite.uniforms.uResolution.value.set(width, height);
+    this.composite.material.glslVersion = THREE.GLSL3;
     this.composer.addPass(this.composite);
 
     this.output = new OutputPass();
@@ -390,16 +410,20 @@ export class PostFXPipeline {
   }
 
   dispose(): void {
-    this.ssao?.dispose();
-    this.bloom?.dispose();
-    this.godRays?.dispose();
-    this.composite?.dispose();
-    this.smaa?.dispose();
-    this.output?.dispose();
+    // @types/three omits dispose() on several of these passes (SSAOPass even
+    // spells it "dipose"), so release them structurally rather than through a
+    // cast that would break the day the runtime changes.
+    release(this.ssao);
+    release(this.bloom);
+    release(this.godRays);
+    release(this.composite);
+    release(this.smaa);
+    release(this.output);
     this.depthTarget?.depthTexture?.dispose();
     this.depthTarget?.dispose();
-    // EffectComposer has no dispose() of its own; its two ping-pong buffers are
-    // everything it owns beyond the passes released above.
+    // EffectComposer declares a dispose() that does not exist at runtime, so
+    // its two ping-pong buffers — everything it owns beyond the passes — are
+    // released here.
     this.composer?.renderTarget1.dispose();
     this.composer?.renderTarget2.dispose();
     if (this.composer) this.composer.passes.length = 0;

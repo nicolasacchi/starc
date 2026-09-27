@@ -22,6 +22,10 @@ module Starc
     # `lobby:state` only advertises matches a client can still act on.
     LISTED_STATUSES = %w[lobby in_progress].freeze
 
+    # Chat history kept per match, so somebody joining a room sees what they
+    # walked into.
+    CHAT_BUFFER = 100
+
     Entry = Struct.new(:id, :stream, :value, keyword_init: true)
 
     class << self
@@ -48,6 +52,7 @@ module Starc
     def initialize
       @mutex = Mutex.new
       @entries = {}
+      @chat = {}
       @cache = nil
     end
 
@@ -64,6 +69,7 @@ module Starc
 
     def unregister(match_id)
       @mutex.synchronize do
+        @chat.delete(match_id.to_i)
         removed = @entries.delete(match_id.to_i)
         @cache = nil if removed
         removed
@@ -139,10 +145,42 @@ module Starc
       }
     end
 
+    # ------------------------------------------------------------------- chat
+
+    # Appends a line to the room's history and pushes it to everybody in it.
+    def push_chat(match_id, line)
+      id = match_id.to_i
+      history = @mutex.synchronize do
+        (@chat[id] ||= []) << line
+        @chat[id] = @chat[id].last(CHAT_BUFFER)
+        @chat[id]
+      end
+      ActionCable.server.broadcast(self.class.match_chat_stream(id), chat_payload(id, [line]))
+      history
+    rescue StandardError => e
+      Rails.logger.warn("[starc] lobby chat failed: #{e.class}: #{e.message}")
+      nil
+    end
+
+    # The last CHAT_BUFFER lines of a room, oldest first.
+    def chat_history(match_id)
+      @mutex.synchronize { (@chat[match_id.to_i] || []).dup }
+    end
+
+    def clear_chat(match_id)
+      @mutex.synchronize { @chat.delete(match_id.to_i) }
+    end
+
     private
 
     def envelope(fields)
       { v: 1, t: "lobby:state", ts: self.class.now_ms }.merge(fields)
+    end
+
+    # One shape for both a live line and a backlog: a client reads
+    # `lines`, always oldest first.
+    def chat_payload(match_id, lines)
+      { v: 1, t: "lobby:chat", ts: self.class.now_ms, match_id: match_id, lines: lines }
     end
 
     # The lowest-slot seat of a match the player is in. A player is only ever in

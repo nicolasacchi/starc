@@ -193,23 +193,29 @@ export class MovementPredictor {
   }
 
   /**
-   * Registers a locally-issued batch and immediately applies its orders, so the
-   * unit starts walking before the server has seen anything.
+   * Registers a locally-issued batch keyed by the `from_tick` it was stamped
+   * with, and applies its orders immediately so the unit starts walking before
+   * the server has seen anything. Returns the batch for the caller to track.
    */
-  queueCommand(cmd: UnacknowledgedCommand): void {
-    if (cmd.fromTick < this.tickCursor) return; // already covered by an `ack`
-    const bucket = this.pending.get(cmd.fromTick);
-    if (bucket) bucket.push(cmd);
-    else this.pending.set(cmd.fromTick, [cmd]);
-    while (this.pending.size > this.maxPendingBatches) {
-      const oldest = this.pending.keys().next();
-      if (oldest.done) break;
-      this.pending.delete(oldest.value);
+  queueCommand(commands: Command[], fromTick: number, id = `local-${fromTick}`): UnacknowledgedCommand {
+    const batch: UnacknowledgedCommand = { id, fromTick, commands, sentAtMs: Date.now() };
+    if (fromTick >= this.tickCursor) {
+      const bucket = this.pending.get(fromTick);
+      if (bucket) bucket.push(batch);
+      else this.pending.set(fromTick, [batch]);
+      while (this.pending.size > this.maxPendingBatches) {
+        const oldest = this.pending.keys().next();
+        if (oldest.done) break;
+        this.pending.delete(oldest.value);
+      }
     }
-    for (const command of cmd.commands) {
+    // The order applies whether or not the server has already seen the tick:
+    // the player clicked, and the unit should be moving now.
+    for (const command of commands) {
       if (command.c === "move") this.issueMove(command.ids, command.x, command.y);
       else if (command.c === "stop" || command.c === "hold") this.issueStop(command.ids);
     }
+    return batch;
   }
 
   /** Drops every batch the server has confirmed, at or below `ackTick`. */

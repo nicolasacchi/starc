@@ -216,24 +216,27 @@ vec3 sc_sunDisk(vec3 dir, float sharpness) {
 /* ------------------------------------------------------------------ */
 
 export const GLSL_DITHER = /* glsl */ `
-// Ordered 8x8 Bayer threshold in [0,1).
+// Recursive Bayer construction, written without integer bit operations: GLSL
+// ES 1.00 has no bit shifts, and three compiles most materials as 1.00 unless
+// they opt into GLSL3. Pure float arithmetic costs three instructions more and
+// works in both dialects.
+float sc_bayer2(vec2 a) {
+  a = floor(a);
+  return fract(a.x * 0.5 + a.y * a.y * 0.75);
+}
+
+float sc_bayer4(vec2 a) {
+  return sc_bayer2(0.5 * a) * 0.25 + sc_bayer2(a);
+}
+
+// Ordered 8x8 threshold, centred on zero so it can be added directly.
 float sc_dither8(vec2 fragCoord) {
-  ivec2 p = ivec2(mod(fragCoord, 8.0));
-  int x = p.x;
-  int y = p.y;
-  int v = 0;
-  for (int bit = 2; bit >= 0; bit--) {
-    int bx = (x >> bit) & 1;
-    int by = (y >> bit) & 1;
-    v = v * 2 + by;
-    v = v * 2 + bx;
-  }
-  return float(v) / 64.0;
+  return sc_bayer4(0.5 * fragCoord) * 0.25 + sc_bayer2(fragCoord) - 0.5;
 }
 
 // Breaks up banding in the sky gradient and fog; amount is in display units.
 vec3 sc_screenDither(vec3 color, vec2 fragCoord, float amount) {
-  return color + (sc_dither8(fragCoord) - 0.5) * amount;
+  return color + sc_dither8(fragCoord) * amount;
 }
 `;
 

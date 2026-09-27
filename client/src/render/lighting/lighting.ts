@@ -33,6 +33,7 @@ const DAY_INTENSITY = 3.4;
 const MOON_INTENSITY = 0.34;
 
 /** Seconds of scene time the bounce lights take to come up at match start. */
+const LIGHT_FADE_SECONDS = 0.75;
 
 /**
  * Everything the rest of the renderer needs to know about the sky at the
@@ -198,12 +199,8 @@ export function sunStateFor(timeOfDay: number, out: SunState, mapTint?: THREE.Co
   // The horizon is the sun's own colour washed towards the zenith — that is
   // what makes low sun bleed orange across the whole skyline.
   _horizon.lerp(out.skyZenith, 0.25);
-  if (w > 0) {
-    _temp.copy(out.color).lerp(out.skyZenith, 0.6);
-    out.skyHorizon.copy(_horizon).lerp(_temp, w);
-  } else {
-    out.skyHorizon.copy(_horizon);
-  }
+  _temp.copy(out.color).lerp(out.skyZenith, 0.6);
+  out.skyHorizon.copy(_horizon).lerp(_temp, w);
 
   if (groundTint) {
     _temp.copy(groundTint).multiplyScalar(0.16 + 0.84 * w);

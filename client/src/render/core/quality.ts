@@ -54,6 +54,12 @@ const SETTINGS: Record<QualityPreset, QualitySettings> = {
     bloom: true,
     ssao: false,
     motionBlur: false,
+    anisotropy: 4,
+    particleBudget: 8192,
+    pixelRatioCap: 1.25,
+    terrainLodRings: 3,
+    shadowCascades: 1,
+  },
   high: {
     shadowMapSize: 2048,
     postFx: true,

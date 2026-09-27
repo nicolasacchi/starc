@@ -10,6 +10,12 @@ they agree.
 All arithmetic is 32-bit unsigned integer modular (`mod 2^32`) where stated,
 and IEEE-754 `double` elsewhere. `lerp(a,b,t) = a + (b - a) * t`.
 
+> **Implementer warning.** In JavaScript, `h * 1274126177` overflows Float64's
+> exact-integer range (4.29e9 × 1.27e9 = 5.5e18 ≫ 2^53) and silently rounds,
+> which desynchronises the two implementations by ~1e-6 — enough for units to
+> visibly float. Use `Math.imul(h, 1274126177)`, which returns the exact low 32
+> bits, for every step of the mix. Ruby's bignum arithmetic is exact as written.
+
 ## Lattice hash
 
 ```
@@ -96,6 +102,8 @@ Ground units are placed at `sample(x, z)`. Air units fly at
 `client/src/render/terrain/heightfield.test.ts` both assert:
 
 1. `sample(0,0)`, `sample(size/2, size/2)`, `sample(size, size)` and 200
-   pseudo-random points match a hard-coded table of doubles to within `1e-9`.
+   pseudo-random points match between the two implementations to within `1e-9`.
+   They currently agree bit-exactly (`0.0`), which is the target — a
+   regression to `1e-6` means someone reintroduced float64 multiply overflow.
 2. The map border (within 16 m of the edge) is flat to within `1e-6`.
 3. `passable` agrees with `heightAt > WATER_LEVEL` at every test point.

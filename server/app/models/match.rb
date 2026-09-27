@@ -111,6 +111,14 @@ class Match < ApplicationRecord
     )
   end
 
+  # A match password is a shared secret, not a player's: the lobby channel sets
+  # `password_digest` directly and checks it here.
+  def authenticate(raw)
+    return false if password_digest.blank?
+
+    BCrypt::Password.new(password_digest) == raw
+  end
+
   def to_summary_hash
     {
       id: id,

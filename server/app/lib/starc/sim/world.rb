@@ -429,7 +429,7 @@ module Starc
 
       # Rebuild the living list after deaths. No allocation per entity.
       def compact_living!
-        @living.reject!(&:dead?)
+        @living.reject! { |e| e.dead }
       end
 
       # --- weapons ----------------------------------------------------------
@@ -513,7 +513,12 @@ module Starc
         target.hp = 0.0 if target.hp.negative?
         target.last_hit_tick = tick
         target.last_damage_tick = tick
+        target.last_hit_by = source_id if source_id
         target.shield_recharge_at_tick = tick + @shield_recharge_delay_ticks
+        # Flag the kill the moment HP runs out. The death event, the kill and
+        # death counters and the reference cleanup all happen in phase 9; this
+        # only stops anything else from shooting a corpse this same tick.
+        mark_dead(target) unless target.hp.positive?
 
         emit(
           "e" => "hit", "id" => source_id || 0, "tid" => target.id,

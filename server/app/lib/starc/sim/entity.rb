@@ -42,7 +42,8 @@ module Starc
       attr_accessor :is_building, :armor, :base_speed, :sight, :build_time, :abilities,
                     :harvest, :cost, :defn, :construct_id, :hold_position, :train_key,
                     :train_serial, :harvest_phase, :harvest_node_id, :last_damage_tick,
-                    :summon_expires_tick, :z_world, :shield_recharge_at_tick
+                    :summon_expires_tick, :z_world, :shield_recharge_at_tick,
+                    :shield_regen, :last_hit_by
 
       def initialize(id:, type_key:, player_id:, x:, z:, defn:, registry:)
         @id = id
@@ -58,6 +59,8 @@ module Starc
         @hp = @hp_max
         @shield_max = (defn["shield"] || 0).to_f
         @shield = @shield_max
+        # Shields per second, read from the roster rather than hard-coded.
+        @shield_regen = (defn["shield_regen"] || 0).to_f
         @shield_recharge_at_tick = 0
         @armor = (defn["armor"] || 0).to_f
         @base_speed = (defn["speed"] || 0).to_f
@@ -82,7 +85,7 @@ module Starc
         @order_queue = []
         @cooldown = 0.0
         @build_progress = 1.0
-        @train_progress = 0.0
+        @train_progress = nil
         @train_queue = []
         @train_key = nil
         @train_serial = 0
@@ -94,6 +97,7 @@ module Starc
         @dead = false
         @created_tick = 0
         @last_hit_tick = -1_000_000
+        @last_hit_by = nil
         @last_damage_tick = -1_000_000
 
         @construct_id = 0
@@ -204,6 +208,19 @@ module Starc
       end
 
       MAX_ORDER_QUEUE = 32
+
+      # Yield every buff whose expiry is still in the future. `tick` of nil
+      # means "ignore expiry", which is what the replay's full-state dump
+      # wants.
+      def each_active_buff(tick)
+        return if @buffs.empty?
+
+        if tick
+          @buffs.each { |key, expiry| yield(key, expiry) if expiry > tick }
+        else
+          @buffs.each { |key, expiry| yield(key, expiry) }
+        end
+      end
 
       def buff_active?(key, tick)
         expiry = @buffs[key]

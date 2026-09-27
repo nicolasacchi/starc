@@ -17,18 +17,17 @@ export const AIR_ALTITUDE = 6.0;
 const BORDER_FALLOFF = 16.0;
 
 function lattice(ix: number, iz: number, seed: number): number {
-  const m = 0xffffffff;
-  // Accumulate in doubles then reduce once, so negative inputs wrap the same
-  // way the Ruby `& 0xFFFFFFFF` does.
-  let h = (ix * 374761393 + iz * 668265263 + seed * 2654435761) % 4294967296;
-  h = h < 0 ? h + 4294967296 : h;
-  h = (h ^ (h >>> 13)) >>> 0;
-  h = (h * 1274126177) % 4294967296;
-  h = h >>> 0;
+  // Exact 32-bit modular arithmetic. `Math.imul` returns the low 32 bits of a
+  // product as a signed int, which is precisely what Ruby's `& 0xFFFFFFFF`
+  // does. Plain `*` would overflow Float64's 2^53 exact range at
+  // 4.29e9 * 1.27e9 = 5.5e18 and silently round, desyncing the two
+  // implementations by ~1e-6 — enough to make units visibly float.
+  let h = (Math.imul(ix, 374761393) + Math.imul(iz, 668265263) + Math.imul(seed, 2654435761)) | 0;
+  h = (h ^ (h >>> 13)) | 0;
+  h = Math.imul(h, 1274126177) | 0;
   h = (h ^ (h >>> 16)) >>> 0;
   return h / 4294967296;
 }
-
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 function valueNoise(x: number, z: number, seed: number): number {

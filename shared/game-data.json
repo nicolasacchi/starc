@@ -2046,16 +2046,7 @@
           },
           "movement": "ground",
           "attack": {
-            "damage": 0,
-            "range": 5,
-            "cooldown": 2,
-            "weapon": "acid",
-            "projectile_speed": 50,
-            "targets": [
-              "ground",
-              "air",
-              "structure"
-            ]
+            "weapon": "none"
           },
           "harvest": null,
           "abilities": [
@@ -2086,6 +2077,14 @@
               "target": "enemy_unit",
               "effect": "spawn",
               "duration": 1
+            },
+            {
+              "key": "acid_spray",
+              "name": "Acid Spray",
+              "cooldown": 1,
+              "target": "enemy_unit",
+              "effect": "damage",
+              "magnitude": 4
             }
           ],
           "produces": [],
@@ -4459,16 +4458,7 @@
       },
       "movement": "ground",
       "attack": {
-        "damage": 0,
-        "range": 5,
-        "cooldown": 2,
-        "weapon": "acid",
-        "projectile_speed": 50,
-        "targets": [
-          "ground",
-          "air",
-          "structure"
-        ]
+        "weapon": "none"
       },
       "harvest": null,
       "abilities": [
@@ -4499,6 +4489,14 @@
           "target": "enemy_unit",
           "effect": "spawn",
           "duration": 1
+        },
+        {
+          "key": "acid_spray",
+          "name": "Acid Spray",
+          "cooldown": 1,
+          "target": "enemy_unit",
+          "effect": "damage",
+          "magnitude": 4
         }
       ],
       "produces": [],

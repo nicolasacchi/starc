@@ -55,6 +55,31 @@ export interface StompTransportOptions {
 }
 
 /** PROTOCOL.md §2: the lobby channel is a fixed name; gameplay is per match. */
+
+/**
+ * What the game and lobby clients need on top of the bare {@link Transport}:
+ * channel subscription, `identify`, error reporting, and STOMP receipts for
+ * round-trip measurement.
+ */
+export interface ChannelTransport extends Transport {
+  /** Subscribes to a channel and returns its STOMP subscription id. */
+  subscribe(channel: string): string;
+  /** Drops a subscription; the server then stops sending to this client. */
+  unsubscribe(channel: string): void;
+  /** Sends `identify` on a game channel (PROTOCOL.md §1). */
+  identify(channel?: string): void;
+  /** Non-fatal problems: protocol violations, unparsable frames. */
+  onError(handler: (err: Error) => void): void;
+  /**
+   * A frame carrying `receipt` was acknowledged. The handler gets the receipt
+   * id and both timestamps, so the caller can derive a round-trip time without
+   * the transport having to guess a clock.
+   */
+  onReceipt(handler: (receiptId: string, sentAtMs: number, receivedAtMs: number) => void): void;
+  /** Local timestamp of the last inbound byte. */
+  lastActivity(): number;
+}
+
 export const LOBBY_CHANNEL = "lobby";
 export const GAME_CHANNEL_PREFIX = "game:";
 
@@ -71,6 +96,9 @@ export function isLobbyChannel(channel: string): boolean {
 const NUL = "\0";
 /** Queued-outbound cap; a client that queues this much is already wedged. */
 const MAX_OUTBOX = 256;
+/** In-flight receipts tracked for round-trip measurement. */
+const MAX_TRACKED_RECEIPTS = 256;
+
 
 function escapeHeaderValue(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/:/g, "\\c").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
@@ -213,7 +241,7 @@ function hostOf(url: string): string {
   return match ? match[1] : url;
 }
 
-export class StompTransport implements Transport {
+export class StompTransport implements ChannelTransport {
   private socket: WebSocket | null = null;
   private parser = new StompFrameParser();
   private currentState: TransportState = "idle";
@@ -231,6 +259,10 @@ export class StompTransport implements Transport {
   private readonly messageHandlers: ((msg: ServerMessage) => void)[] = [];
   private readonly stateHandlers: ((s: TransportState) => void)[] = [];
   private readonly errorHandlers: ((err: Error) => void)[] = [];
+  private readonly receiptHandlers: ((receiptId: string, sentAtMs: number, receivedAtMs: number) => void)[] = [];
+  /** receipt id → the moment the frame carrying it was written. */
+  private readonly receiptsSent = new Map<string, number>();
+
   private heartbeatTimer: number | null = null;
   private lastInboundAt = 0;
   private pingOutstanding = false;
@@ -294,6 +326,11 @@ export class StompTransport implements Transport {
     this.errorHandlers.push(handler);
   }
 
+  onReceipt(handler: (receiptId: string, sentAtMs: number, receivedAtMs: number) => void): void {
+    this.receiptHandlers.push(handler);
+  }
+
+
   /** Subscribes to a channel and returns its STOMP subscription id. */
   subscribe(channel: string): string {
     const id = `sub-${this.nextSubscriptionId++}`;
@@ -343,8 +380,12 @@ export class StompTransport implements Transport {
       destination,
       "content-type": "application/json;charset=utf-8",
     };
-    if ("id" in message && typeof message.id === "string") headers.receipt = message.id;
+    if ("id" in message && typeof message.id === "string") {
+      headers.receipt = message.id;
+      this.trackReceipt(message.id);
+    }
     this.writeFrame(encodeStompFrame("SEND", headers, JSON.stringify(message)));
+
   }
 
   close(): void {
@@ -363,6 +404,8 @@ export class StompTransport implements Transport {
     this.connected = false;
     this.subscriptions.clear();
     this.gameChannel = null;
+    this.receiptsSent.clear();
+
     this.outbox.length = 0;
     this.setState("closed");
   }
@@ -373,6 +416,14 @@ export class StompTransport implements Transport {
   }
 
   /* ------------------------------------------------------------- internals */
+  private trackReceipt(receiptId: string): void {
+    if (this.receiptsSent.size >= MAX_TRACKED_RECEIPTS) {
+      const oldest = this.receiptsSent.keys().next();
+      if (!oldest.done) this.receiptsSent.delete(oldest.value);
+    }
+    this.receiptsSent.set(receiptId, Date.now());
+  }
+
 
   private onOpen(): void {
     this.parser.reset();
@@ -417,7 +468,7 @@ export class StompTransport implements Transport {
           this.onMessageFrame(frame);
           break;
         case "RECEIPT":
-          // Command acknowledged: the snapshot's `ack` tick is authoritative.
+          this.onReceiptFrame(frame);
           break;
         case "ERROR":
           this.raise(new Error(frame.headers.get("message") ?? "stomp error"));
@@ -444,6 +495,17 @@ export class StompTransport implements Transport {
     for (const handler of this.messageHandlers) handler(parsed);
   }
 
+  private onReceiptFrame(frame: StompFrame): void {
+    const receiptId = frame.headers.get("receipt-id");
+    if (receiptId === undefined) return;
+    const sentAtMs = this.receiptsSent.get(receiptId);
+    this.receiptsSent.delete(receiptId);
+    const receivedAtMs = this.lastInboundAt;
+    for (const handler of this.receiptHandlers) {
+      handler(receiptId, sentAtMs ?? receivedAtMs, receivedAtMs);
+    }
+  }
+
   private onClose(ev: CloseEvent): void {
     this.stopHeartbeat();
     this.socket = null;
@@ -451,6 +513,7 @@ export class StompTransport implements Transport {
     this.subscriptions.clear();
     this.gameChannel = null;
     this.outbox.length = 0;
+    this.receiptsSent.clear();
     if (this.connectReject) {
       const err = new Error(`cable closed before the STOMP handshake (code ${ev.code})`);
       this.connectReject(err);

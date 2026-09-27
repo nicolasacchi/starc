@@ -54,7 +54,8 @@ export interface ReconnectOptions {
   onResync?: (attempt: number) => void;
 }
 
-const systemTimer: TimerApi = {
+/** The real timer, used unless a caller injects its own. */
+export const systemTimer: TimerApi = {
   set: (handler, delayMs) => setTimeout(handler, delayMs) as unknown as TimerHandle,
   clear: (handle) => clearTimeout(handle),
 };

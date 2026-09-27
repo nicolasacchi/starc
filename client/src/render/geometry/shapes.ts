@@ -317,18 +317,6 @@ export class PartList {
     return this;
   }
 
-  /** Adds the same geometry twice, mirrored across X (left/right limbs). */
-  addMirrored(
-    geometry: THREE.BufferGeometry,
-    tone: PartTone,
-    transform?: PartTransform,
-  ): this {
-    const left = geometry.clone();
-    this.add(geometry, tone, transform);
-    this.add(left, tone, { ...transform, sx: -(transform?.sx ?? transform?.s ?? 1) });
-    return this;
-  }
-
   startGroup(name: string): this {
     this.open = { name, parts: [] };
     this.groups.push(this.open);
@@ -366,6 +354,26 @@ export class PartList {
     out.computeBoundingSphere();
     return out;
   }
+}
+
+/**
+ * Merges already-built buffers into one geometry, one material group per
+ * input. Air units use it to keep the shadow decal out of the hull's draw
+ * call, which needs its own transparent material.
+ */
+export function mergeGroups(geometries: readonly THREE.BufferGeometry[]): THREE.BufferGeometry {
+  if (geometries.length === 0) throw new Error("mergeGroups(): nothing to merge");
+  if (geometries.length === 1) {
+    const single = geometries[0] as THREE.BufferGeometry;
+    single.computeBoundingBox();
+    single.computeBoundingSphere();
+    return single;
+  }
+  const merged = mergeGeometries([...geometries], true);
+  if (!merged) throw new Error("mergeGroups(): geometry merge failed");
+  merged.computeBoundingBox();
+  merged.computeBoundingSphere();
+  return merged;
 }
 
 /* ------------------------------------------------------------------ */

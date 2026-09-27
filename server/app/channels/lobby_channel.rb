@@ -3,8 +3,8 @@
 # Lobby channel `lobby` (PROTOCOL.md §2): the match browser and the room in
 # front of a match.
 #
-# `lobby:list` is open — the browser is public — while every mutating action
-# needs a player. Any state change is announced twice: once on the shared
+# `lobby:list` is open — browsing the lobby is public — while every mutating
+# action needs a player. Any state change is announced twice: once on the shared
 # `lobby` stream for everybody, and once on the player's own stream for the
 # `you` block, which is per-player by definition. The database is the source of
 # truth; `Starc::LobbyRegistry` is the fan-out cache in front of it.
@@ -12,7 +12,6 @@ class LobbyChannel < ApplicationCable::Channel
   CHAT_MIN_LENGTH = 1
   CHAT_MAX_LENGTH = 280
   CHAT_RATE_LIMIT = 0.5
-  CHAT_BUFFER = 100
   MIN_PLAYERS = 2
   MAX_PLAYERS = 8
 
@@ -36,17 +35,17 @@ class LobbyChannel < ApplicationCable::Channel
   def unsubscribed
     # Losing the lobby tab while still in its lobby means leaving it: a match
     # must not sit in the browser waiting for somebody who has gone. A match
-    # already under way is not touched — `GameChannel` owns disconnect handling
-    # from there, and its forfeit countdown would be wrong to start twice.
-    return if @player_id.nil?
-
-    match = lobby_match_of(@player_id)
+    # already under way is left alone — `GameChannel` owns disconnect handling
+    # from there, and its forfeit countdown must not be started twice.
+    match = lobby_match_of(player_id)
     return if match.nil?
 
-    match.remove_player!(@player_id)
-    match.update!(status: :abandoned, ended_at: Time.current) if match.player_count.zero?
-    Starc::LobbyRegistry.instance.unregister(match.id)
-    Starc::LobbyRegistry.instance.broadcast_state
+    match.remove_player!(player_id)
+    if match.player_count.zero?
+      match.update!(status: :abandoned, ended_at: Time.current)
+      registry.unregister(match.id)
+    end
+    registry.broadcast_state
   rescue StandardError => e
     Rails.logger.warn("[starc] lobby leave on disconnect failed: #{e.class}: #{e.message}")
   end
@@ -64,7 +63,6 @@ class LobbyChannel < ApplicationCable::Channel
   end
 
   def lobby_list(data)
-    registry = Starc::LobbyRegistry.instance
     transmit_message("lobby:state", matches: registry.matches(data["filters"]), you: registry.context_for(player_id))
   end
 
@@ -80,22 +78,20 @@ class LobbyChannel < ApplicationCable::Channel
     map = Starc::Maps.find(map_id)
     return reject_payload("unknown map #{map_id.inspect}") if map.nil?
 
-    max_players = clamp_max_players(data["max_players"], map)
     match = Match.create!(
       name: name,
       mode: mode,
       map_id: map_id,
-      max_players: max_players,
+      max_players: clamp_max_players(data["max_players"], map),
       seed: SecureRandom.random_number(2**32),
-      status: :lobby
+      status: :lobby,
+      password_digest: password_digest(data["password"])
     )
-    set_password(match, data["password"])
-    match.save!
-    match.add_player!(player: current_player, race: playable_race(data["race_preference"]), host: true)
-    Starc::LobbyRegistry.instance.register(match.id)
+    match.add_player!(player: current_player, race: preferred_race(data), host: true)
+    registry.register(match.id)
     announce_state
   rescue ActiveRecord::RecordInvalid => e
-    reject_payload(e.record&.errors&.full_messages&.to_sentence.to_s)
+    reject_payload(invalid_message(e))
   end
 
   def lobby_join(data)
@@ -108,24 +104,26 @@ class LobbyChannel < ApplicationCable::Channel
     return reject_message("lobby_full", "that match is full") if match.full?
     return reject_message("wrong_password", "incorrect match password") unless password_ok?(match, data["password"])
 
-    match.add_player!(player: current_player, race: playable_race(data["race_preference"]), host: false)
-    Starc::LobbyRegistry.instance.register(match.id)
+    match.add_player!(player: current_player, race: preferred_race(data), host: false)
+    registry.register(match.id)
     announce_state
   rescue ActiveRecord::RecordInvalid => e
-    reject_message("lobby_full", e.record&.errors&.full_messages&.to_sentence.to_s)
+    reject_message("lobby_full", invalid_message(e))
   end
 
   def lobby_leave(data)
     return unless require_player
 
-    match = lobby_match_of(player_id, id: data["match_id"])
-    return reject_message("match_in_progress", "a running match cannot be left") if match&.in_progress?
-    return reject_message("not_found", "you are not in that match") if match.nil?
+    seat = seat_in(data["match_id"])
+    return reject_message("not_found", "you are not in that match") if seat.nil?
+
+    match = seat.match
+    return reject_message("match_in_progress", "a running match cannot be left") if match.in_progress?
 
     match.remove_player!(current_player)
     if match.player_count.zero?
       match.update!(status: :abandoned, ended_at: Time.current)
-      Starc::LobbyRegistry.instance.unregister(match.id)
+      registry.unregister(match.id)
     end
     announce_state
   end
@@ -133,10 +131,10 @@ class LobbyChannel < ApplicationCable::Channel
   def lobby_ready(data)
     return unless require_player
 
-    match = lobby_match_of(player_id, id: data["match_id"])
-    return reject_message("not_found", "you are not in that match") if match.nil?
+    seat = seat_in(data["match_id"])
+    return reject_message("not_found", "you are not in that match") if seat.nil?
 
-    match.match_players.find_by(player_id: player_id).update!(ready: data["ready"] ? true : false)
+    seat.update!(ready: data["ready"] ? true : false)
     announce_state
   end
 
@@ -148,11 +146,13 @@ class LobbyChannel < ApplicationCable::Channel
     return reject_message("not_host", "only the host can change the settings") unless host?(match)
     return reject_message("match_in_progress", "a running match cannot be changed") unless match.lobby?
 
-    apply_settings(match, data)
+    problem = apply_settings(match, data)
+    return reject_payload(problem) if problem
+
     match.save!
     announce_state
   rescue ActiveRecord::RecordInvalid => e
-    reject_payload(e.record&.errors&.full_messages&.to_sentence.to_s)
+    reject_payload(invalid_message(e))
   end
 
   def lobby_start(data)
@@ -165,8 +165,8 @@ class LobbyChannel < ApplicationCable::Channel
     return reject_message("not_ready", "every player has to be ready first") unless match.all_ready?
 
     match.start!
-    # The runner is what makes the match live: it builds the world and starts
-    # stepping. Subscribers of `game:<id>` get `game:start` from it.
+    # The runner is what makes a match live: it builds the world and starts
+    # stepping. Subscribers of `game:<id>` get their `game:start` from it.
     if Starc::MatchRunner.adopt(match).nil?
       match.update!(status: :abandoned, ended_at: Time.current)
       return reject_message("server_error", "the match could not be started on this server")
@@ -179,16 +179,13 @@ class LobbyChannel < ApplicationCable::Channel
     return unless require_player
 
     match_id = data["match_id"].to_i
-    seat = MatchPlayer.find_by(match_id: match_id, player_id: player_id)
-    return reject_message("not_found", "you are not in that match") if seat.nil?
+    return reject_message("not_found", "you are not in that match") if seat_in(match_id).nil?
 
     text = data["text"].to_s
-    if text.length < CHAT_MIN_LENGTH || text.length > CHAT_MAX_LENGTH
-      return reject_payload("chat must be #{CHAT_MIN_LENGTH}..#{CHAT_MAX_LENGTH} characters")
-    end
-    if (now = monotonic) - @last_chat_at < CHAT_RATE_LIMIT
-      return reject_message("rate_limited", "you are sending chat too fast")
-    end
+    return reject_payload("chat must be #{CHAT_MIN_LENGTH}..#{CHAT_MAX_LENGTH} characters") unless valid_chat?(text)
+
+    now = monotonic
+    return reject_message("rate_limited", "you are sending chat too fast") if (now - @last_chat_at.to_f) < CHAT_RATE_LIMIT
 
     @last_chat_at = now
     line = {
@@ -197,7 +194,7 @@ class LobbyChannel < ApplicationCable::Channel
       "text" => text,
       "ts" => self.class.now_ms
     }
-    Starc::LobbyRegistry.instance.push_chat(match_id, line)
+    registry.push_chat(match_id, line)
     transmit_message("lobby:chat", match_id: match_id, lines: [line])
   end
 
@@ -207,8 +204,8 @@ class LobbyChannel < ApplicationCable::Channel
     Starc::LobbyRegistry.instance
   end
 
-  # Every state change: the browser for everybody, then the `you` block for
-  # this player on every tab they have open.
+  # Any state change: the browser for everybody, then the `you` block for this
+  # player on every tab they have open.
   def announce_state
     registry.invalidate!
     registry.broadcast_state
@@ -221,25 +218,24 @@ class LobbyChannel < ApplicationCable::Channel
   end
 
   def subscribe_personal
-    return if @player_id.nil? || @personal_stream
+    return if player_id.nil? || @personal_stream
 
-    @personal_stream = registry.class.player_stream(@player_id)
+    @personal_stream = Starc::LobbyRegistry.player_stream(player_id)
     stream_from @personal_stream
   end
 
   # Chat is per match, so a connection only listens to the room it is in — and
-  # is caught up on the last CHAT_BUFFER lines when it arrives.
+  # is caught up on the buffered lines when it arrives.
   def sync_chat_stream
     context = registry.context_for(player_id)
     match_id = context && context["match_id"]
     return if match_id == @chat_match_id
 
-    stop_stream(registry.class.match_chat_stream(@chat_match_id)) if @chat_match_id
+    stop_stream(Starc::LobbyRegistry.match_chat_stream(@chat_match_id)) if @chat_match_id
     @chat_match_id = match_id
     return if match_id.nil?
 
-    stream = registry.class.match_chat_stream(match_id)
-    stream_from stream
+    stream_from Starc::LobbyRegistry.match_chat_stream(match_id)
     history = registry.chat_history(match_id)
     transmit_message("lobby:chat", match_id: match_id, lines: history) if history.any?
   end
@@ -260,42 +256,64 @@ class LobbyChannel < ApplicationCable::Channel
     reject_message("invalid_payload", message)
   end
 
-  def lobby_match_of(player, id: nil)
-    matches = Match.where(id: [id, current_match_id(player)].compact).to_a
-    matches.find { |m| m.match_players.exists?(player_id: player) && !m.finished? && !m.abandoned? }
+  # The seat of this player in a named match, whatever its state.
+  def seat_in(match_id)
+    return nil if player_id.nil?
+
+    MatchPlayer.find_by(match_id: match_id.to_i, player_id: player_id)
   end
 
-  def current_match_id(player)
-    MatchPlayer.where(player_id: player).order(:slot).first&.match_id
+  # The live match this player is sitting in, if any.
+  def lobby_match_of(player)
+    return nil if player.nil?
+
+    seat = MatchPlayer.where(player_id: player).order(:slot).first
+    return nil if seat.nil?
+
+    match = Match.find_by(id: seat.match_id)
+    return nil if match.nil? || match.finished? || match.abandoned?
+
+    match
   end
 
   def host?(match)
     match.match_players.find_by(player_id: player_id)&.host?
   end
 
+  # Returns a problem description, or nil when the settings were applied.
   def apply_settings(match, data)
     name = data["name"].to_s.strip
+    mode = data["mode"].to_s
     match.name = name if name.present?
-    match.mode = data["mode"].to_s if Match::MODES.include?(data["mode"].to_s)
+    return "mode must be one of #{Match::MODES.join(', ')}" if mode.present? && !Match::MODES.include?(mode)
 
-    if (map_id = data["map_id"].to_s).present?
+    match.mode = mode if mode.present?
+
+    map_id = data["map_id"].to_s
+    if map_id.present?
       map = Starc::Maps.find(map_id)
-      raise ActiveRecord::RecordInvalid, match if map.nil?
-      raise ActiveRecord::RecordInvalid, match if map["max_players"].to_i < match.player_count
+      return "unknown map #{map_id.inspect}" if map.nil?
+      return "that map only seats #{map['max_players']}" if map["max_players"].to_i < match.player_count
 
       match.map_id = map_id
       match.max_players = [clamp_max_players(data["max_players"], map), match.player_count].max
     elsif data.key?("max_players")
-      match.max_players = clamp_max_players(data["max_players"], nil)
+      requested = clamp_max_players(data["max_players"], nil)
+      return "the match already has #{match.player_count} players" if requested < match.player_count
+
+      match.max_players = requested
     end
 
-    set_password(match, data["password"]) if data["password"].present?
+    match.password_digest = password_digest(data["password"]) || match.password_digest
+    nil
   end
 
-  def set_password(match, password)
-    return if password.blank?
+  # A match password is a shared secret rather than a player's, so the digest
+  # is built here and checked through `Match#authenticate`.
+  def password_digest(password)
+    return nil if password.blank?
 
-    match.password_digest = BCrypt::Password.create(password.to_s)
+    BCrypt::Password.create(password.to_s)
   end
 
   def password_ok?(match, password)
@@ -307,22 +325,28 @@ class LobbyChannel < ApplicationCable::Channel
     false
   end
 
-  def playable_race(preference)
-    race = preference.to_s
-    MatchPlayer::RACES.include?(race) && !match_race_taken?(race) ? race : nil
+  # A race preference is honoured when it is playable; `Match#add_player!` then
+  # hands out a free one if it is taken.
+  def preferred_race(data)
+    race = (data["race_preference"] || data["race"]).to_s
+    MatchPlayer::RACES.include?(race) ? race : nil
   end
 
-  def match_race_taken?(_race)
-    false
+  def valid_chat?(text)
+    text.length >= CHAT_MIN_LENGTH && text.length <= CHAT_MAX_LENGTH
   end
 
   def clamp_max_players(requested, map)
-    value = requested.is_a?(Integer) ? requested : (Integer(requested.to_s, exception: false) || MIN_PLAYERS)
-    value = MIN_PLAYERS if value < MIN_PLAYERS
+    value = requested.is_a?(Integer) ? requested : Integer(requested.to_s, exception: false)
+    value = MIN_PLAYERS if value.nil? || value < MIN_PLAYERS
     value = MAX_PLAYERS if value > MAX_PLAYERS
     cap = map && map["max_players"].to_i
     value = cap if cap.positive? && value > cap
     value
+  end
+
+  def invalid_message(error)
+    error.record&.errors&.full_messages&.to_sentence.presence || "the request could not be applied"
   end
 
   def monotonic
