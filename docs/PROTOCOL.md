@@ -1,17 +1,21 @@
 # STARC — Wire Protocol v1
 
-Authoritative-server RTS netcode. JSON over ActionCable (STOMP). Server is
+Authoritative-server RTS netcode. JSON over ActionCable. Server is
 authoritative: clients never compute damage, deaths or resource totals.
 
-- Transport: `wss://<host>/cable` (ActionCable, subprotocol `stomp`)
-- Channel: `game:<match_id>` for gameplay, `lobby` for the match browser
+- Transport: `wss://<host>/cable` — **ActionCable's native JSON protocol, not
+  STOMP.** ActionCable 8.1 ships no STOMP support at all (there is no
+  `action_cable/server/stomp/` and no `accept-version` handling), so a STOMP
+  `CONNECT` frame is silently ignored. Do not request a `stomp` subprotocol.
+- Channels: `GameChannel` (params `{ match_id }`) for gameplay, `LobbyChannel`
+  for the match browser.
 - Encoding: JSON, UTF-8. All numbers are finite JSON numbers; no NaN/Infinity
   (use `null`).
 - Clock: fixed simulation step `TICK_MS = 50` (20 Hz). Snapshot cadence
   `SNAPSHOT_HZ = 10` (every 2nd tick). Clients render at display rate and
   interpolate between the two most recent snapshots.
 
-Every message has the shape:
+Every **game** message has the shape:
 
 ```json
 { "v": 1, "t": "<message_type>", "id": "<uuid>", "ts": 1712345678901 }
@@ -22,24 +26,56 @@ Every message has the shape:
 server epoch millis on server→client (client-supplied on client→server and
 ignored).
 
+### ActionCable envelope
+
+The shapes above travel *inside* ActionCable. Each WebSocket text frame
+carries one JSON document:
+
+```json
+{"command":"subscribe","identifier":"{\"channel\":\"GameChannel\",\"match_id\":5}"}
+{"command":"message","identifier":"{\"channel\":\"GameChannel\",\"match_id\":5}","data":"{\"v\":1,\"t\":\"game:command\",...}"}
+{"command":"unsubscribe","identifier":"{\"channel\":\"LobbyChannel\"}"}
+```
+
+`identifier` is a JSON-**encoded string** of the channel params, and `data` is
+itself a JSON **string**.
+
+```json
+{"type":"welcome"}
+{"type":"ping","message":1712345678901}
+{"type":"confirm_subscription","identifier":"..."}
+{"type":"rejection","identifier":"..."}
+{"type":"disconnect","reason":"unauthorized","reconnect":false}
+{"identifier":"{\"channel\":\"GameChannel\",\"match_id\":5}","message":{ ...game message... }}
+```
+
+Routing is by `identifier`. A frame whose `identifier` matches no live
+subscription is ignored. `{"type":"disconnect","reconnect":false}` is a
+server-requested terminal close — the client must honour it and must not
+auto-reconnect.
+
 ---
 
 ## 1. Connection & identity
 
-1. Client opens the cable and subscribes to `lobby`.
-2. Client performs HTTP `POST /api/v1/session` (see §7) and receives
-   `{ "token": "<opaque>", "player": {...} }`.
-3. Client sends `identify` on the `game:<id>` channel with the token; the
-   connection stores the authenticated player in
-   `connection.current_player`.
+1. Client performs HTTP `POST /api/v1/players` or `POST /api/v1/session`
+   (see §7) and receives `{ "token": "<opaque>", "player": {...} }`.
+2. Client opens `wss://<host>/cable`, passing that token the way
+   `ApplicationCable::Connection#connect` reads it, and waits for
+   `{"type":"welcome"}`.
+3. Client subscribes to `{"channel":"LobbyChannel"}` and
+   `{"channel":"GameChannel","match_id":N}`.
+4. Client sends `identify` on the `GameChannel` with the token; the connection
+   stores the authenticated player in `connection.current_player`.
 
-`identify` is mandatory before any other message on a `game:` channel.
-Unidentified connections may only send `identify` and are disconnected after
-15 s of silence.
+`identify` is mandatory before any other message on a `GameChannel`.
+Unidentified connections may only send `identify`. An unidentified client is
+refused with a fatal `unauthenticated` — but the subscription is **not**
+terminated, so `identify` still works afterwards.
 
 ---
 
-## 2. Lobby channel (`lobby`)
+## 2. Lobby channel (`LobbyChannel`)
 
 ### Client → Server
 
@@ -56,7 +92,7 @@ Unidentified connections may only send `identify` and are disconnected after
 
 ### Server → Client
 
-`lobby:state` — full lobby, broadcast to every subscriber of `lobby`:
+`lobby:state` — full lobby, broadcast to every `LobbyChannel` subscriber:
 
 ```json
 {
@@ -84,7 +120,7 @@ Errors use `error` with `{ code, message, fatal }`. Codes:
 
 ## 3. Match start
 
-`game:start` is sent to each `game:<match_id>` subscriber. Every client
+`game:start` is sent to each `GameChannel` subscriber. Every client
 reconstructs the identical opening state from `seed` + `map_id` + the roster,
 so no opening world-state payload is transmitted.
 

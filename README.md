@@ -11,7 +11,7 @@ running a fixed-step authoritative simulation at 20 Hz.
 ```
 ┌─────────────────────────┐         ┌──────────────────────────────┐
 │  client/  three.js      │   WS    │  server/  Rails 8            │
-│  Vite · TypeScript      │◀───────▶│  ActionCable (STOMP)         │
+│  Vite · TypeScript      │◀───────▶│  ActionCable (native JSON)   │
 │  WebGL2 custom renderer │  JSON   │  Starc::Sim::World @ 20 Hz   │
 └─────────────────────────┘  REST   │  SQLite · Replays · Ratings  │
               ▲                       └──────────────────────────────┘
@@ -113,7 +113,7 @@ server/
 
 client/src/
   shared/          protocol types + typed roster accessors
-  net/             STOMP transport, snapshot buffer, interpolation, prediction
+  net/             cable transport, snapshot buffer, interpolation, prediction
   render/
     core/            renderer, post FX, RTS camera, quality presets
     terrain/         height field (mirrors the Ruby one exactly) + clipmap mesh

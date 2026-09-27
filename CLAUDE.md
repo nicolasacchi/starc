@@ -59,7 +59,7 @@ worker:
 
 ```
 shared/   protocol types, roster accessors
-net/      STOMP transport, snapshots, interpolation, prediction
+net/      cable transport, snapshots, interpolation, prediction
 render/   core, terrain, sky, water, geometry, materials, lighting, vfx, entities, hud3d
 game/     input, selection, hotkeys, app state machine
 ui/       screens and HUD (DOM)
