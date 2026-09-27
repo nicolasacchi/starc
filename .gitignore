@@ -1,7 +1,8 @@
 # Ruby / Rails
 /server/vendor/bundle/
-/server/log/*.log
+/server/log/
 /server/tmp/
+/server/storage/
 /server/storage/*.sqlite3
 /server/storage/*.sqlite3-*
 /server/.bundle/
