@@ -90,10 +90,16 @@ function mix(a: number, b: number, t: number): THREE.Color {
 type ToneSet = Readonly<Record<ToneName, THREE.Color>>;
 
 function terranTones(source: number): ToneSet {
+  const base = mix(0x3d454e, source, 0.22);
+  const dark = base.clone().multiplyScalar(0.55);
   return {
-    base: mix(0x3d454e, source, 0.22),
-    dark: mix(0x3d454e, source, 0.22).multiplyScalar(0.55),
-    deep: mix(0x0f1215, source, 0.2),
+    base,
+    dark,
+    // `deep` is derived from `dark` rather than from its own constant, so the
+    // shadow ramp cannot invert on a race whose source colour is bright.
+    // Terran's amber is bright enough that mixing it into a near-black made
+    // `deep` read *lighter* than `dark`, which is visible on any panel using it.
+    deep: mix(dark.getHex(), 0x0a0c0f, 0.55),
     accent: mix(source, 0xffe0a8, 0.12),
     emissive: mix(source, 0xffe9c0, 0.45),
     highlight: mix(source, 0xffffff, 0.6),
@@ -107,10 +113,12 @@ function terranTones(source: number): ToneSet {
 }
 
 function zergTones(source: number): ToneSet {
+  const base = mix(0x3a1c26, source, 0.55);
+  const dark = mix(0x3a1c26, source, 0.25);
   return {
-    base: mix(0x3a1c26, source, 0.55),
-    dark: mix(0x3a1c26, source, 0.25),
-    deep: mix(0x140a0e, source, 0.15),
+    base,
+    dark,
+    deep: mix(dark.getHex(), 0x0d0609, 0.6),
     accent: mix(source, 0xff5a3c, 0.45),
     emissive: mix(0xff6a3a, source, 0.3),
     highlight: mix(source, 0xffb08a, 0.55),
@@ -124,10 +132,12 @@ function zergTones(source: number): ToneSet {
 }
 
 function protossTones(source: number): ToneSet {
+  const base = mix(0xb08c3a, source, 0.55);
+  const dark = mix(0xb08c3a, source, 0.25);
   return {
-    base: mix(0xb08c3a, source, 0.55),
-    dark: mix(0xb08c3a, source, 0.25),
-    deep: mix(0x1a1508, source, 0.2),
+    base,
+    dark,
+    deep: mix(dark.getHex(), 0x0d0b05, 0.65),
     accent: mix(source, 0xfff6c0, 0.35),
     emissive: mix(0xffffff, source, 0.35),
     highlight: mix(0xffffff, source, 0.2),

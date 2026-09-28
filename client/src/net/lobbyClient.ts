@@ -194,15 +194,21 @@ export class LobbyClient {
     }
   }
 
-  /** Resolves the target match, or reports that there is none. */
+  /**
+   * Resolves the target match, or reports that there is none.
+   *
+   * An explicitly passed match id addresses that match and nothing else: it
+   * must not become the client's new default. Latching it here meant
+   * `ready(13, false)` followed by an argument-free `start()` addressed match
+   * 13, so a host in a two-lobby UI could start the wrong match.
+   */
   private requireMatch(matchId?: number): number | null {
-    const target = matchId ?? this.matchId;
-    if (target === null) {
+    if (matchId !== undefined) return matchId;
+    if (this.matchId === null) {
       this.events.emit("error", { code: "no_match", message: "no match selected", fatal: false });
       return null;
     }
-    this.matchId = target;
-    return target;
+    return this.matchId;
   }
 
   /** Leaves the lobby channel; the transport itself is left alone. */

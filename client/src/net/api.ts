@@ -352,19 +352,22 @@ export class ApiClient {
 
   /** `GET /races` → 200 `{ races }`, the full roster. */
   races(): Promise<RacesResponse> {
-    return this.request<RacesResponse>("GET", "/races");
+    // Public read: no bearer token.
+    return this.request<RacesResponse>("GET", "/races", undefined, false);
   }
 
   /** `GET /maps` → 200 `{ maps }`. */
   maps(): Promise<MapsResponse> {
-    return this.request<MapsResponse>("GET", "/maps");
+    // Public read: no bearer token.
+    return this.request<MapsResponse>("GET", "/maps", undefined, false);
   }
 
   /* ---------------------------------------------------------------- matches */
 
   /** `GET /matches` → 200 `{ matches, page, per_page, total }`. */
   listMatches(query: ListMatchesQuery = {}): Promise<MatchListResponse> {
-    return this.request<MatchListResponse>("GET", `/matches${queryString(query)}`);
+    // Public read: the match browser is world-readable.
+    return this.request<MatchListResponse>("GET", `/matches${queryString(query)}`, undefined, false);
   }
 
   /** `POST /matches` → 201 `{ match }`; the caller is seated as host. */
@@ -432,12 +435,16 @@ export class ApiClient {
    * One request. Parses the error envelope into {@link ApiError} and times out
    * through an `AbortController` so a stalled server cannot hang the UI.
    */
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, auth = true): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const headers: Record<string, string> = { accept: "application/json" };
     if (body !== undefined) headers["content-type"] = "application/json";
-    const token = this.currentToken();
+    // Only authenticated calls carry the bearer token. The roster, the map
+    // list and the match browser are public reads, and sending the session
+    // token to an endpoint that does not need it hands it to whatever origin
+    // `baseUrl` names for no benefit.
+    const token = auth ? this.currentToken() : null;
     if (token) headers.authorization = `Bearer ${token}`;
 
     let response: Response;
