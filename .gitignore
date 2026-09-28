@@ -11,6 +11,9 @@
 /client/dist/
 /client/coverage/
 
+# Scratch: review briefs, throwaway probes, verification screenshots
+/tmp/
+
 # Root tooling
 /node_modules/
 

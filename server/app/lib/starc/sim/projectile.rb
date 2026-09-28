@@ -60,15 +60,6 @@ module Starc
         }
       end
 
-      def to_state_hash
-        {
-          "id" => @id, "owner_id" => @owner_id, "weapon" => @weapon,
-          "x" => @x, "y" => @y, "z" => @z, "tx" => @tx, "ty" => @ty, "tz" => @tz,
-          "target_id" => @target_id, "speed" => @speed, "damage" => @damage,
-          "splash_radius" => @splash_radius, "splash_pct" => @splash_pct
-        }
-      end
-
       private
 
       def round3(v)

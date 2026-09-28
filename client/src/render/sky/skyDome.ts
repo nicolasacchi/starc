@@ -46,6 +46,14 @@ const TURBIDITY: Record<string, number> = {
 
 const MOON_TINT = new THREE.Color(0.62, 0.72, 1.0);
 
+/**
+ * The phase at which the rig's night arc ends: 2 minus the 0.08 of twilight
+ * `lighting.ts` blends over before dawn. Past it the model has begun handing
+ * the direction back to the sun, so a disc read there would be a sunrise
+ * point rather than a moon.
+ */
+const MOON_ARC_END = 1.92;
+
 const sunState = createSunState();
 const moonState = createSunState();
 const mapTint = new THREE.Color();
@@ -178,8 +186,19 @@ export class SkyDome {
     this.night = sunState.night;
     this.intensity = Math.max(sunState.intensity, this.night * 0.05);
 
-    // A full moon is exactly anti-solar; a thinner one lags by its phase.
-    sunStateFor(this.timeOfDay + 0.5 + (this.moonPhase - 0.5) * 0.2, moonState, mapTint, groundTint);
+    // A full moon is exactly anti-solar and a gibbous one trails it, so the
+    // disc belongs on the key light's own direction: `sunStateFor` is the
+    // moon once the sun is down, and the dome's header rule — one model, no
+    // second sun — means the disc is that moon and not a fresh evaluation.
+    // The lag is a CLOCK offset, so it is taken along the model's night arc
+    // rather than across it: the reading is kept inside the two-unit cycle,
+    // which is what puts it on the night arc (a reading that ran past 1 would
+    // sample the day arc and paint the disc at the sunrise point, half a turn
+    // from the moonlight), and is held at the phase where that arc ends,
+    // because a lagging moon that has run off the end of it has set.
+    const lag = (this.moonPhase - 0.5) * 0.2;
+    const cycle = this.timeOfDay - 2 * Math.floor(this.timeOfDay / 2);
+    sunStateFor(Math.min(cycle + lag, MOON_ARC_END), moonState, mapTint, groundTint);
     this.moonDir.copy(moonState.direction);
 
     this.sunLight.copy(sunState.color);

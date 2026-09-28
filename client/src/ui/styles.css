@@ -449,6 +449,14 @@ select.field__input {
   box-shadow: 0 0 10px -2px var(--accent-glow);
 }
 
+.check__label {
+  line-height: 1;
+}
+
+.check__input:checked + .check__label {
+  color: var(--text);
+}
+
 .keycap {
   display: inline-grid;
   place-items: center;
@@ -1001,7 +1009,7 @@ select.field__input {
 
 .seat {
   display: grid;
-  grid-template-columns: 22px 10px minmax(0, 1fr) auto auto auto;
+  grid-template-columns: 22px 10px minmax(0, 1fr) auto auto auto auto;
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
@@ -1377,6 +1385,18 @@ select.field__input {
   color: #cfe9f5;
 }
 
+.slot--ability .slot__icon {
+  color: var(--icon-accent);
+}
+
+/* The conic sweep already shows the fraction; the tint is what says
+   "not yet", and the panel button is not disabled while it ticks. */
+.slot.is-cooling .slot__icon,
+.ability.is-cooling .ability__name,
+.ability.is-cooling .ability__hint {
+  filter: saturate(0.3) brightness(0.74);
+}
+
 .slot__sweep {
   position: absolute;
   inset: 0;
@@ -1627,6 +1647,13 @@ select.field__input {
   border-color: var(--line-hot);
 }
 
+/* The enlarged map is 360px wide inside a HUD cell sized for 224px, so it
+   spills over the command-card column unless it is lifted. */
+.minimap.is-expanded {
+  z-index: 3;
+  box-shadow: var(--shadow-panel), 0 0 0 1px var(--line-hot);
+}
+
 /* ============================================================= BUILD MENU */
 
 .build {
@@ -1654,8 +1681,23 @@ select.field__input {
   color: var(--text-faint);
 }
 
-.build__group + .build__group {
-  margin-top: 10px;
+.build__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Flex items default to `min-width: auto`, and the auto-fill grid inside
+   refuses to go below one 190px column — without this the panel scrolls
+   sideways instead of wrapping. */
+.build__group {
+  min-width: 0;
+}
+
+.build__empty {
+  padding: 18px 4px;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
 }
 
 .build__grouptitle {
@@ -1883,6 +1925,13 @@ select.field__input {
   color: var(--text-faint);
   border-top: 1px solid var(--line);
   padding-top: 5px;
+}
+
+.unit__abilities,
+.unit__queue {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .unit__abilitylist {
@@ -2224,7 +2273,7 @@ select.field__input {
   text-align: right;
 }
 
-.result__table thead th {
+.result__th {
   padding: 5px 8px;
   border-bottom: 1px solid var(--line);
   font-size: var(--fs-xs);
@@ -2235,9 +2284,9 @@ select.field__input {
   text-align: right;
 }
 
-.result__table th:first-child,
-.result__table th:nth-child(2),
-.result__table th:nth-child(3) {
+.result__th:first-child,
+.result__th:nth-child(2),
+.result__th:nth-child(3) {
   text-align: left;
 }
 

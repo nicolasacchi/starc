@@ -113,7 +113,7 @@ module Starc
 
       def start_position(slot)
         positions = @map["start_positions"] || []
-        return { "x" => @size / 2.0, "y" => @size / 2.0 } if positions.empty?
+        return { "x" => @size / 2.0, "z" => @size / 2.0 } if positions.empty?
 
         p = positions[slot.to_i % positions.size]
         { "x" => p["x"].to_f, "z" => p["z"].to_f }

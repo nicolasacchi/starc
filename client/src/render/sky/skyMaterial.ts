@@ -262,8 +262,15 @@ vec3 scSunDisc( vec3 dir ) {
   float limb = 1.0 - 0.93 * ( 1.0 - mu ) - 0.23 * ( 1.0 - mu ) * ( 1.0 - mu );
   float sunE = scSunExtinction( uSunDirection.y ) * uSunIntensity;
   float aureole = pow( max( cosSun, 0.0 ), 1400.0 ) * 0.35 + pow( max( cosSun, 0.0 ), 14.0 ) * 0.008;
+  // There is no sun disc at night: past phase 1 the key-light direction IS
+  // the moon (the rig lerps it onto its night arc), so an ungated disc here
+  // paints a 760 x 80 radiance core inside the moon's 1.6. uNight is 0 right
+  // through sunset -- the day weight only falls across the night arc -- so
+  // this cannot dim the setting sun, and the disc's own horizon gate below
+  // still decides when the sun actually sets.
   return uSunDiscColor * ( 760.0 * disc * limb * min( sunE, 80.0 ) + aureole * 20.0 )
-    * smoothstep( -0.05, 0.01, uSunDirection.y );
+    * smoothstep( -0.05, 0.01, uSunDirection.y )
+    * ( 1.0 - uNight );
 }
 `;
 

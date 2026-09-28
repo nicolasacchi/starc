@@ -30,6 +30,11 @@
  *   highest `from_tick` processed for *any* client in the match
  *   (PROTOCOL.md §5), so a client at 950 reading 1000 because somebody else
  *   got there first would throw away clicks the server has never seen.
+ * - A local order is *also* retired the first time a snapshot contradicts it
+ *   by more than the snap threshold while reporting no order of the server's
+ *   own. That is the decline signal: without it a refused or lost click
+ *   oscillated — out to the threshold, snapped back, out again — for the whole
+ *   order timeout, marching a unit to a destination the server refuses.
  * - An order the server never echoes is given up on after
  *   {@link MovementPredictorOptions.orderTimeoutMs}, so a lost send retires
  *   the order instead of walking a unit across the map forever.
@@ -269,6 +274,22 @@ export class MovementPredictor {
       // and leave prediction with nothing to show, so the local position
       // stands — and only a disagreement past the snap threshold (a push, a
       // teleport, an order the server refused) pulls it back.
+      //
+      // A disagreement past the threshold *with no order of the server's own*
+      // is also the proof that the click was declined, and that is the only
+      // evidence available: the protocol has no per-batch ack, and `ack` is
+      // match-wide. Staleness cannot account for a gap wider than one round
+      // trip of walking (threshold / speed is well under a snapshot interval
+      // plus RTT at any speed in the roster), so a gap that wide with the
+      // server reporting no order means the server never took it. Retiring it
+      // here is what stops the unit marching to a destination the server
+      // refuses: the snap below re-bases the position, and without this the
+      // order simply resumed and re-crossed the threshold seven frames later,
+      // over and over, until the order timeout gave up.
+      if (unit.localOrderTick > 0 && serverOrder === 0 && error > this.snapThreshold) {
+        this.clearOrder(unit);
+      }
+
       const unconfirmed = unit.localOrderTick > 0;
       if (!unconfirmed || error > this.snapThreshold) {
         unit.x = entity.x;

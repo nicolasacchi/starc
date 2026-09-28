@@ -119,3 +119,16 @@ write tests that assert wiring, that a copy happened, that a method was
 called, or that a value merely "grew". Headless is the default: Vitest runs
 with `environment: "node"`, so anything that touches `document` must do it in
 an explicit `mount()`, never a constructor.
+
+**Check a review claim against the code before you act on it.** A wave of eight
+fresh read-only lenses reported five real defects and three false ones — the
+build panel called inert was fully wired, and a `hold` order called permanent
+was correct StarCraft semantics. Two of the three refutations were headline
+claims, and following either would have replaced working code with a guess.
+Static reading is good at finding a wrong value and bad at concluding a path is
+unreachable; the build panel's `click` handler is four hops away and perfectly
+intact. Read the whole chain before calling something dead.
+
+**When a test cannot fail without your change, say so.** A regression guard
+that passes before and after is legitimate — label it a guard, not evidence.
+Do not present it as a reproduction.

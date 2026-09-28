@@ -290,4 +290,71 @@ describe("MovementPredictor", () => {
     expect(moved).toBe(0);
     expect(unit.order).toBeNull();
   });
+
+  it("stops marching the frame a snapshot proves the server declined the click", () => {
+    predictor.applySnapshot(snap(100, [entity(1, { x: 0 })]));
+    predictor.queueCommand([{ c: "move", ids: [1], x: 60, z: 0 }], 100);
+
+    // The server never takes the order: it keeps the unit at the origin with
+    // no order of its own, on every snapshot. Before the fix the predictor
+    // re-crossed the snap threshold every seven frames — 0 → 1.2 m → 0 → 1.2 m
+    // — for the whole three-second order timeout, so the unit visibly
+    // oscillated toward a destination the server had refused.
+    const errors: number[] = [];
+    let retireFrame = -1;
+    for (let frame = 0; frame < 40; frame++) {
+      predictor.update(1);
+      predictor.applySnapshot(snap(101 + frame, [entity(1, { x: 0, st: "idle", ord: 0 })]));
+      const unit = predictor.predicted(1)!;
+      errors.push(Math.hypot(unit.x, unit.z));
+      if (retireFrame < 0 && unit.localOrderTick === 0) retireFrame = frame;
+    }
+
+    // Retired well inside the first round trip, not at the 3 s timeout.
+    expect(retireFrame).toBeGreaterThanOrEqual(0);
+    expect(retireFrame).toBeLessThan(10);
+    // And the unit never sets off again: from the declining frame on, the
+    // position the player watches is the server's, every frame.
+    expect(errors.slice(retireFrame)).toEqual(errors.slice(retireFrame).map(() => 0));
+  });
+
+  it("does not read ordinary snapshot latency as a decline", () => {
+    predictor.applySnapshot(snap(100, [entity(1, { x: 0 })]));
+    predictor.queueCommand([{ c: "move", ids: [1], x: 60, z: 0 }], 100);
+
+    // The server has the click in flight: for three ticks it reports no order
+    // and a position that is merely stale, well inside what one round trip of
+    // walking explains. Retiring on that would throw away a live click and
+    // freeze the unit for the rest of the latency.
+    for (let frame = 0; frame < 3; frame++) {
+      predictor.update(1);
+      predictor.applySnapshot(snap(101 + frame, [entity(1, { x: 0, st: "idle", ord: 0 })]));
+    }
+    const unit = predictor.predicted(1)!;
+    expect(unit.order).toEqual({ x: 60, z: 0 });
+    expect(unit.localOrderTick).toBe(100);
+    expect(unit.x).toBeGreaterThan(0);
+  });
+
+  it("does not climb a slope the server refused, in height as well as on the ground", () => {
+    // The local probe walks the unit up a ramp; the server, which owns
+    // terrain, never moves it. The predicted height is fed from the probe
+    // between snapshots, so a retained order is visible on the y axis too.
+    const climbing = new MovementPredictor({
+      playerId: 1,
+      terrain: { sample: (x: number) => x * 0.5, passable: () => true },
+    });
+    climbing.applySnapshot(snap(100, [entity(1, { x: 0, y: 0 })]));
+    climbing.queueCommand([{ c: "move", ids: [1], x: 40, z: 0 }], 100);
+
+    for (let frame = 0; frame < 20; frame++) {
+      climbing.update(1);
+      climbing.applySnapshot(snap(101 + frame, [entity(1, { x: 0, y: 0, st: "idle", ord: 0 })]));
+    }
+    const unit = climbing.predicted(1)!;
+    expect(unit.order).toBeNull();
+    expect(unit.x).toBe(0);
+    // Never glued to the local ramp: the server's height stands.
+    expect(unit.y).toBe(0);
+  });
 });

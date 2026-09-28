@@ -86,3 +86,70 @@ game were stuck — "Waiting for the server to open the match…" on an element
 computed to `display: none`. Overlays keep their text forever, so a
 `textContent` check reports a state that is not on screen. Check computed
 `display` before concluding anything about what the user sees.
+
+## Wave 2 — adversarial review with fresh agents
+
+Eight read-only lenses reviewed the client and the sim. Two of the eight
+headline claims were **false** and were refuted against the code before any
+edit; six were real. Verification before fixing was not ceremony — it is the
+difference between five fixes and seven, two of which would have replaced
+working code with a guess.
+
+### Refuted (do not "fix" these)
+
+- **"The build panel is 100% inert."** It is not. `buildMenu.ts:183-191` wires
+  `click -> onBeginPlacement`; `app.ts:601-603` forwards it to
+  `input.beginPlacement`, which sets `modeState = "placing"` and shows a ghost.
+  Two other callers exist in `input.ts`. `buildableWith` returns the units a
+  structure produces, which is the correct StarCraft semantic.
+- **"`hold` makes a unit permanently inert."** It does not. `targeting.rb:43`
+  suppresses *acquisition* only; `combat.rb:32` gates firing on `target_id`
+  alone, so a held unit keeps shooting what it already had, and any new order
+  clears the flag. That is exactly what hold means.
+
+### Fixed, each with a test that fails without it
+
+- **The painted moon was 60-139 deg from the moonlight.** `skyDome.ts` advanced
+  the reading by half a cycle, which is quadrature, not anti-solar. The
+  prescribed `+1.0` was *also* wrong — in this model anti-solar is not
+  reachable by any clock shift, because azimuth advances 2 rad per cycle unit,
+  not pi. The disc is now the key light's own direction with the phase lag
+  taken *along* the night arc. Worst separation fell from 132.6 deg to 14.2 deg.
+- **A sun disc was painted on top of the moon all night** (mine, found by the
+  agent fixing the moon). Past phase 1 `uSunDirection` *is* the moon, so
+  `scSunDisc`'s own horizon gate read 1.0 and the shader drew a
+  `760 * min(sunE, 80)` — about 6.1e4 radiance, some 38000x the moon disc's
+  1.6 — inside the moon's own, larger, disc. The night sky rendered as a
+  blown-out white dot. Now gated on `uNight`, which is 0 right through sunset,
+  so the setting sun is untouched.
+- **The last x/y transposition** (`terrain.rb:116` returned `y` where every
+  consumer reads `z`; latent only because all four shipped maps define start
+  positions).
+- **A refused order oscillated for 3 full seconds** — six frames marching out,
+  one frame snapped back, repeating, because `applySnapshot` retired a local
+  order only on an echo or the timeout. The claim was "~3 frames"; it was ~10x
+  worse.
+- **The terrain splat really was two layers, not four.** Measured, not read: a
+  GLSL interpreter in the test runs the shader's own text against every map's
+  packed field texture. Dirt was never the largest layer anywhere and snow was
+  absent from two maps. Four root causes: a fixed slope full-scale (so rock
+  followed `elevation`, making the green-hills map 2.4x rockier than the map
+  described as impassable rock), `uSnowAmount` spent twice and then squared, a
+  grass floor dirt was mathematically capped under, and no per-biome rock
+  budget. The normalisation claim was refuted by the same measurement — sums
+  were 1.000000 everywhere.
+- **Nine UI classes the TypeScript emits had no CSS rule at all**, plus one
+  selector mismatch: the sheet styled `.result__table thead th` while the
+  module emits `.result__th`. And the lobby `.seat` row declared 6 grid
+  tracks for 7 children, so a host on a team wrapped onto a second row.
+
+### Still environment-blocked
+
+The in-game 3D capture remains unavailable here. Software rasterisation
+saturates the render loop until CDP screenshots time out and the tab is killed;
+this is a property of the harness, not of the product, and it is the same limit
+recorded above. What I did verify in-browser this wave: the app boots, restores
+a session, enables Play, enters a live two-client match, and renders a real
+match — the menu frame is captured. Two matches were correctly marked
+`abandoned` when their browser tab's cable dropped, which is the server
+behaving correctly under a killed tab.

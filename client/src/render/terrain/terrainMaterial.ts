@@ -25,7 +25,14 @@
  *
  * Splat weighting is a per-pixel blend of height, slope and a two-octave noise
  * mask (the macro mask from the field texture plus an analytic fBm), so the
- * layer boundaries are organic instead of contour-banded.
+ * layer boundaries are organic instead of contour-banded. Every layer's extent
+ * is a fraction of the map's own surface — `rockAmount`, `snowAmount` and
+ * `shoreAmount` in `PALETTES` — placed by covered-area percentile rather than
+ * by an absolute height or grade, and grass is what the other three did not
+ * take. `terrainSplat.test.ts` evaluates `GLSL_SPLAT_WEIGHTS` itself over every
+ * shipped map and holds all four to it: measured mean weights are 0.19–0.65
+ * rock, 0.05–0.57 grass, 0.02–0.05 dirt, 0.05–0.70 snow, and they sum to one
+ * everywhere.
  *
  * WHY THE GROUND IS NOT A GRID. Four layer textures on `worldXZ / tileSize` is
  * a lattice, and a lattice laid flat under an overhead sun reads as paving.
@@ -129,19 +136,37 @@ function clamp255(x: number): number {
 interface FieldEntry {
   texture: THREE.DataTexture;
   refs: number;
+  /**
+   * The normalised slope below which `fraction` of the map lies. The rock line
+   * is placed with this, so "half this map is rock" means the same thing on a
+   * 4 m-relief map and a 11 m one.
+   */
+  slopePercentile(fraction: number): number;
 }
 
 const fieldCache = new Map<string, FieldEntry>();
 
 /**
- * Grade and concavity are read over a 6 m / 8 m stencil rather than the
- * field's own 1 m lattice, and both are normalised so a map's authored
- * `elevation` does not change how the surface is coloured: a slope is a slope
- * and a crease is a crease whatever the map's total relief is.
+ * Grade and concavity are read over a 6 m / 8 m stencil rather than the field's
+ * own 1 m lattice, and both are normalised against the map's *own* grade
+ * distribution, so a map's authored `elevation` does not change how the surface
+ * is coloured: a slope is a slope and a crease is a crease whatever the map's
+ * total relief is. A fixed metres-per-metre full scale did the opposite — it
+ * made rock coverage a direct function of `elevation`, so the 11 m grassland
+ * map wore the most rock and the low-relief map described as "a ring of
+ * impassable rock" wore the least.
  */
 const GRADE_STENCIL = 3;
-const SLOPE_FULL_SCALE = 0.22;
 const CURVATURE_FULL_SCALE = 0.06;
+/**
+ * Where the grade distribution's 85th percentile lands on the normalised
+ * slope, 0..1. The channel is `1 - exp(-grade / scale)` so it approaches 1
+ * without ever clipping to a plateau: a linear full scale put a quarter of
+ * every map at exactly 1.0, and the rock boundary then sat inside that
+ * saturated block where the mask noise could no longer move it.
+ */
+const SLOPE_P85 = 1.05;
+const SLOPE_HISTOGRAM_BINS = 256;
 
 function buildFieldTexture(map: MapDef): FieldEntry {
   const field = heightField(map);
@@ -162,22 +187,57 @@ function buildFieldTexture(map: MapDef): FieldEntry {
       (j < 0 ? 0 : j > n - 1 ? n - 1 : j) * n + (i < 0 ? 0 : i > n - 1 ? n - 1 : i)
     ];
 
+  // Two passes: the grade distribution sets the slope channel's scale, and the
+  // scale is what the channel is, so it cannot be known until every grade has
+  // been read. O(size^2) either way — this runs once per map, not per frame.
+  const grades = new Float32Array(n * n);
+  let gradeMax = 0;
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const s = GRADE_STENCIL * 2;
+      const gx = (at(i + GRADE_STENCIL, j) - at(i - GRADE_STENCIL, j)) / s;
+      const gz = (at(i, j + GRADE_STENCIL) - at(i, j - GRADE_STENCIL)) / s;
+      const grade = Math.hypot(gx, gz);
+      grades[j * n + i] = grade;
+      if (grade > gradeMax) gradeMax = grade;
+    }
+  }
+  const bins = SLOPE_HISTOGRAM_BINS;
+  const histogram = new Uint32Array(bins);
+  const span = Math.max(gradeMax, 1e-6);
+  for (let i = 0; i < grades.length; i++) {
+    histogram[Math.min(bins - 1, Math.floor((grades[i] / span) * bins))]++;
+  }
+  const gradePercentile = (fraction: number): number => {
+    const want = grades.length * Math.min(Math.max(fraction, 0), 1);
+    let seen = 0;
+    for (let b = 0; b < bins; b++) {
+      seen += histogram[b];
+      if (seen >= want) return Math.min(span, ((b + 1) / bins) * span);
+    }
+    return span;
+  };
+  const slopeScale = Math.max(gradePercentile(0.85) / SLOPE_P85, 1e-6);
+  const slopes = new Float32Array(grades.length);
+  for (let i = 0; i < grades.length; i++) slopes[i] = 1 - Math.exp(-grades[i] / slopeScale);
+  const sortedSlopes = Float32Array.from(slopes).sort();
+  const slopePercentile = (fraction: number): number =>
+    sortedSlopes[
+      Math.min(sortedSlopes.length - 1, Math.floor(sortedSlopes.length * Math.min(Math.max(fraction, 0), 1)))
+    ];
+
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
       const o = (j * n + i) * 4;
       const h = grid[j * n + i];
-      const s = GRADE_STENCIL * 2;
-      const gx = (at(i + GRADE_STENCIL, j) - at(i - GRADE_STENCIL, j)) / s;
-      const gz = (at(i, j + GRADE_STENCIL) - at(i, j - GRADE_STENCIL)) / s;
       // Concave positive: valleys and creases darken, ridges catch the light.
       const curvature =
         (h - (at(i + 4, j) + at(i - 4, j) + at(i, j + 4) + at(i, j - 4)) * 0.25) / curvatureScale;
-      const slope = Math.min(1, Math.hypot(gx, gz) / SLOPE_FULL_SCALE);
       const mask = tiledFbm(i / n, j / n, (map.terrain_seed ^ 0x51ed) >>> 0, 4, 4, 0.55);
       data[o] = half(h);
       data[o + 1] = half(curvature);
       data[o + 2] = half(mask);
-      data[o + 3] = half(slope);
+      data[o + 3] = half(slopes[j * n + i]);
     }
   }
 
@@ -190,7 +250,17 @@ function buildFieldTexture(map: MapDef): FieldEntry {
   texture.generateMipmaps = false;
   texture.colorSpace = THREE.NoColorSpace;
   texture.needsUpdate = true;
-  return { texture, refs: 0 };
+  return { texture, refs: 0, slopePercentile };
+}
+
+/** The cached field entry, built on first use. */
+function fieldEntry(map: MapDef): FieldEntry {
+  let entry = fieldCache.get(map.id);
+  if (!entry) {
+    entry = buildFieldTexture(map);
+    fieldCache.set(map.id, entry);
+  }
+  return entry;
 }
 
 /**
@@ -199,13 +269,19 @@ function buildFieldTexture(map: MapDef): FieldEntry {
  * from under each other.
  */
 export function acquireTerrainFieldTexture(map: MapDef): THREE.DataTexture {
-  let entry = fieldCache.get(map.id);
-  if (!entry) {
-    entry = buildFieldTexture(map);
-    fieldCache.set(map.id, entry);
-  }
+  const entry = fieldEntry(map);
   entry.refs++;
   return entry.texture;
+}
+
+/**
+ * The normalised slope below which `fraction` of this map's surface lies.
+ * `createTerrainMaterial` places the rock line with it, which is what makes
+ * "half this map is rock" mean the same thing on a 4 m-relief map and an 11 m
+ * one instead of following the map's authored `elevation`.
+ */
+function terrainSlopePercentile(map: MapDef, fraction: number): number {
+  return fieldEntry(map).slopePercentile(fraction);
 }
 
 /** Balances one `acquireTerrainFieldTexture`; disposes when the last one goes. */
@@ -230,7 +306,12 @@ interface Palette {
   snow: string;
   grade: string;
   gradeAmount: number;
+  /** Fraction of the map the snow cap covers, by covered area. */
   snowAmount: number;
+  /** Fraction of the map that is exposed rock, by covered area. */
+  rockAmount: number;
+  /** Width of the shoreline band, as a fraction of the map's relief. */
+  shoreAmount: number;
   aoStrength: number;
 }
 
@@ -263,6 +344,15 @@ function heightPercentile(grid: ArrayLike<number>, min: number, max: number, fra
   return max;
 }
 
+/**
+ * `rockAmount` and `snowAmount` are fractions of the map's *surface*, placed by
+ * covered-area percentile rather than by an absolute height or grade, so what
+ * a biome says about itself is what it renders as. `rocky` used to carry its
+ * rockiness in `snowAmount: 0.9`, which is why the map described as "a ring of
+ * impassable rock" came out two-thirds snow and the 11 m grassland map came out
+ * half bare rock: with no rock budget of its own, the only way a biome could
+ * look stony was to make it cold.
+ */
 const PALETTES: Record<string, Palette> = {
   grassland: {
     rock: "#6b6a63",
@@ -272,6 +362,8 @@ const PALETTES: Record<string, Palette> = {
     grade: "#cfe0a8",
     gradeAmount: 0.35,
     snowAmount: 0.22,
+    rockAmount: 0.15,
+    shoreAmount: 0.12,
     aoStrength: 1.5,
   },
   rocky: {
@@ -281,7 +373,9 @@ const PALETTES: Record<string, Palette> = {
     snow: "#e8eef4",
     grade: "#d6cfc4",
     gradeAmount: 0.3,
-    snowAmount: 0.9,
+    snowAmount: 0.5,
+    rockAmount: 0.5,
+    shoreAmount: 0.14,
     aoStrength: 1.9,
   },
   badlands: {
@@ -292,6 +386,8 @@ const PALETTES: Record<string, Palette> = {
     grade: "#ffb27a",
     gradeAmount: 0.45,
     snowAmount: 0.12,
+    rockAmount: 0.35,
+    shoreAmount: 0.1,
     aoStrength: 1.6,
   },
   island: {
@@ -302,9 +398,18 @@ const PALETTES: Record<string, Palette> = {
     grade: "#bfe6d8",
     gradeAmount: 0.4,
     snowAmount: 0.85,
+    rockAmount: 0.12,
+    shoreAmount: 0.18,
     aoStrength: 1.4,
   },
 };
+
+/**
+ * Width of the rock transition, in normalised-slope units. Wide enough that the
+ * mask noise moves the boundary visibly, narrow enough that the palette's
+ * rockAmount still reads as covered area.
+ */
+const ROCK_BAND = 0.2;
 
 function paletteFor(map: MapDef): Palette {
   return PALETTES[map.biome] ?? PALETTES.grassland;
@@ -416,8 +521,10 @@ uniform float uRingCount;      // how many clipmap rings exist
 uniform float uLevelHalf;      // clipmap level-0 half extent in finest cells
 uniform float uWaterLevel;
 uniform float uRelief;         // map's height range, metres
-uniform float uSnowLine;
-uniform float uSnowAmount;
+uniform float uSnowLine;        // height percentile, metres
+uniform float uRockLine;        // normalised-slope percentile, 0..1
+uniform float uRockBand;        // width of the rock transition, in slope units
+uniform float uShoreAmount;     // shore band width, as a fraction of uRelief
 uniform float uAoStrength;
 uniform vec3 uTintRock;
 uniform vec3 uTintGrass;
@@ -549,6 +656,42 @@ vec3 scLayerAlbedo( vec4 t, vec3 tint, float detail ) {
 `;
 
 /**
+ * The four splat weights at one ground sample, and nothing else. Split out of
+ * `GLSL_MAP_FRAGMENT` because it is the one block with no texture fetch in it:
+ * given the field sample (`scField`) and the blended mask (`scMask`) it is pure
+ * arithmetic, so `terrainSplat.test.ts` can evaluate the *shader's own text*
+ * headlessly instead of re-deriving it, and the measured layer coverage is the
+ * coverage the GPU gets.
+ */
+export const GLSL_SPLAT_WEIGHTS = /* glsl */ `
+
+// --- splat weights: slope drives rock, height drives snow and the beach ---
+// Every layer's extent is set by *covered area* on this map, not by an absolute
+// height or grade: uRockLine is this map's slope percentile, uSnowLine its
+// height percentile, and the shore band a fraction of its own relief. That is
+// what stops a map's authored elevation from deciding how much of it is rock.
+float scSlope = scField.a + ( scMask - 0.5 ) * 0.30;
+float scRockW = smoothstep( uRockLine - uRockBand, uRockLine, scSlope );
+// Snow does not lie on a cliff, and the cap band is a fraction of the map's
+// relief. uSnowAmount is deliberately NOT multiplied in here: the snow line
+// already places that much of the map above it, and spending the same number
+// twice is what kept snow below the grass floor on every map whose cap was
+// under half the terrain.
+float scSnowW = smoothstep( uSnowLine - uRelief * 0.04, uSnowLine + uRelief * 0.09, scH + ( scMask - 0.5 ) * uRelief * 0.20 )
+  * ( 1.0 - scRockW );
+float scDirtW = 1.0 - smoothstep( uWaterLevel + uRelief * 0.01, uWaterLevel + uRelief * uShoreAmount, scH + ( scMask - 0.5 ) * uRelief * 0.05 );
+// Grass is what the other three did not take, rather than a constant 0.5..1.0
+// floor: a floor that no banded layer could undercut is what left the splat
+// resolving to two layers, with dirt and snow contributing ~1% of the albedo.
+float scGrassW = ( 1.0 - scRockW ) * ( 1.0 - scDirtW ) * ( 1.0 - scSnowW ) * ( 0.55 + 0.45 * scMask );
+// No squaring pass: the bands above are already smoothsteps, and squaring the
+// four weights only exaggerated overlap — which now contradicts the palette,
+// whose numbers are covered-area fractions.
+vec4 scW4 = vec4( scRockW, scGrassW, scDirtW, scSnowW );
+scW4 /= max( scW4.x + scW4.y + scW4.z + scW4.w, 1e-4 );
+`;
+
+/**
  * Replaces `<map_fragment>`. Everything declared here lands in `main()` before
  * `<roughnessmap_fragment>` and `<normal_fragment_maps>`, which is how the
  * staged splat weights, UVs and roughness reach the normal-map stage: all four
@@ -592,22 +735,7 @@ vec4 scGrass = texture2D( uGrassMap, scUvGrass, scBias );
 vec4 scDirt = texture2D( uDirtMap, scUvDirt, scBias );
 vec4 scSnow = texture2D( uSnowMap, scUvSnow, scBias );
 
-// --- splat weights: slope drives rock, height drives snow and the beach ---
-// The beach and snow bands are fractions of the map's own relief rather than
-// fixed numbers of metres, so raising a map's elevation does not turn half of
-// it into shoreline — and, on a low-relief map, a fixed 3 m snow band was
-// wide enough to swallow a third of the whole terrain.
-float scSlope = scField.a + ( scMask - 0.5 ) * 0.30;
-float scRockW = smoothstep( 0.34, 0.72, scSlope );
-float scSnowW = uSnowAmount
-  * smoothstep( uSnowLine - uRelief * 0.04, uSnowLine + uRelief * 0.09, scH + ( scMask - 0.5 ) * uRelief * 0.20 )
-  * ( 1.0 - smoothstep( 0.34, 0.72, scSlope ) );
-float scShore = uWaterLevel + uRelief * 0.11;
-float scDirtW = smoothstep( scShore, uWaterLevel + uRelief * 0.004, scH + ( scMask - 0.5 ) * uRelief * 0.05 ) * ( 0.5 + 0.5 * scMask );
-float scGrassW = 0.5 + 0.5 * scMask;
-vec4 scW4 = vec4( scRockW, scGrassW, scDirtW, scSnowW );
-scW4 *= scW4;                      // crisper transitions
-scW4 /= max( scW4.x + scW4.y + scW4.z + scW4.w, 1e-4 );
+${GLSL_SPLAT_WEIGHTS}
 
 vec3 scAlbedo =
     scLayerAlbedo( scRock, uTintRock, scDetail ) * scW4.x
@@ -758,7 +886,9 @@ export function createTerrainMaterial(
     uWaterLevel: { value: TERRAIN_WATER_LEVEL },
     uRelief: { value: relief },
     uSnowLine: { value: heightPercentile(field.grid, minHeight, maxHeight, 1 - palette.snowAmount) },
-    uSnowAmount: { value: palette.snowAmount },
+    uRockLine: { value: terrainSlopePercentile(map, 1 - palette.rockAmount) },
+    uRockBand: { value: ROCK_BAND },
+    uShoreAmount: { value: palette.shoreAmount },
     uAoStrength: { value: palette.aoStrength },
     uTintRock: { value: new THREE.Color(palette.rock) },
     uTintGrass: { value: new THREE.Color(palette.grass) },
