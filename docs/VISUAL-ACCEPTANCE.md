@@ -3,6 +3,24 @@
 The renderer has never had a GPU. Everything below was established in headless
 software-rasterised Chromium, which shapes what evidence is available.
 
+## Geometry conformance, and what it caught
+
+A test pass took `render/geometry` from 46% to 99.7% and immediately found
+that **25 of the 57 roster entities sat below the ground plane** — buildings
+sunk up to 0.52 m — because `beveledBox` was origin-centred while every other
+primitive bases at y=0. The project's own `assertGeometryCoverage()` had been
+throwing because of it.
+
+That is now a convention rather than 25 special cases, `assertGeometryCoverage()`
+passes for all 57 keys, and `tmp/shots/GEOM-FIXED.png` shows the Terran base
+and workers standing on the ridge rather than buried in it.
+
+The same pass found that `airHoverLift` lifted nothing, that reach was measured
+from the model's half-width so off-centre hulls escaped the fit, and that three
+docstrings were false of the code beneath them — including `UV_METRES`, which
+was documented as a divisor and used as a multiplier, making every procedural
+texture 4x coarser than stated.
+
 ## `low` — fully verified, in the browser
 
 A live two-player match, at 1280×720 and 1600×900, showing sky, horizon,
