@@ -10,7 +10,8 @@
  * struts, Protoss gets faceted gold architecture with energy nodes, Zerg gets
  * bulbous carapace mounds crowned with spines.
  *
- * Conventions: origin at the base centre, y = 0 on the ground, model faces +Z.
+ * Conventions: origin at the base centre, y = 0 on the ground (every
+ * structure is seated there before the footprint fit runs), model faces +Z.
  *
  * This module and `unitGeometry.ts` reference each other so that neither entry
  * point throws for any of the 57 roster keys; the calls happen at build time,
@@ -689,6 +690,13 @@ export function buildBuildingGeometry(typeKey: string): THREE.BufferGeometry {
   };
   builder(build);
   const geometry = build.parts.merge();
+  // Seat the structure on the ground plane before the fit: a builder may
+  // hang its lowest part above y = 0 (a hull block raised onto a plinth, a
+  // mound under a landing pad), and both the fit and the roster measure a
+  // structure from the ground plane.
+  geometry.computeBoundingBox();
+  const base = geometry.boundingBox?.min.y ?? 0;
+  if (base !== 0) geometry.translate(0, -base, 0);
   // Buildings must match their collision circle exactly, so anything poking
   // past the radius is pulled in rather than merely trimmed.
   fitFootprint(geometry, def.size.radius, def.size.height, {

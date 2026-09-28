@@ -16,8 +16,13 @@
  *    different origins merge into one buffer without welding.
  *
  * UVs are planar-projected per triangle from the face's dominant axis and
- * scaled so that `UV_METRES` world metres map to one texture tile; revolved
- * shapes use cylindrical UVs instead so panels do not smear on curves.
+ * divided by `UV_METRES`, so `UV_METRES` world metres map to one texture
+ * tile; revolved shapes use cylindrical UVs instead so panels do not smear
+ * on curves.
+ *
+ * Every primitive in this module stands on y = 0 and is centred on the
+ * origin in X and Z: `taperedBox(1, 2, 3)` occupies x -0.5 .. 0.5, y 0 .. 2,
+ * z -1.5 .. 1.5. `fitFootprint` and the unit/building builders rely on it.
  */
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -28,8 +33,12 @@ export type V3 = readonly [number, number, number];
 export type P3 = [number, number, number];
 type V2 = readonly [number, number];
 
-/** World metres covered by one texture tile. */
-export const UV_METRES = 0.5;
+/**
+ * World metres spanned by one texture tile, i.e. the length of one UV repeat.
+ * UV coordinates are `position / UV_METRES`, so a 2 m hull wall shows exactly
+ * one repeat of the procedural texture.
+ */
+export const UV_METRES = 2;
 
 /* ------------------------------------------------------------------ */
 /* Vector helpers                                                      */
@@ -68,7 +77,7 @@ export function mulberry32(seed: number): () => number {
 /* ------------------------------------------------------------------ */
 
 /** Planar-projection UVs, picking the plane perpendicular to the face normal. */
-function projectUV(a: V3, b: V3, c: V3, uvScale: number): [V2, V2, V2] {
+function projectUV(a: V3, b: V3, c: V3, uvMetres: number): [V2, V2, V2] {
   const n = normalOf(a, b, c);
   const ax = Math.abs(n[0]);
   const ay = Math.abs(n[1]);
@@ -85,11 +94,8 @@ function projectUV(a: V3, b: V3, c: V3, uvScale: number): [V2, V2, V2] {
     pu = (p) => p[0];
     pv = (p) => p[1];
   }
-  return [
-    [pu(a) * uvScale, pv(a) * uvScale],
-    [pu(b) * uvScale, pv(b) * uvScale],
-    [pu(c) * uvScale, pv(c) * uvScale],
-  ];
+  const uv = (p: V3): V2 => [pu(p) / uvMetres, pv(p) / uvMetres];
+  return [uv(a), uv(b), uv(c)];
 }
 
 /**
@@ -101,31 +107,31 @@ export class TriSoup {
   private readonly uvs: number[] = [];
 
   /** Raw triangle, caller guarantees the winding. */
-  tri(a: V3, b: V3, c: V3, uvScale = UV_METRES): this {
+  tri(a: V3, b: V3, c: V3, uvMetres = UV_METRES): this {
     this.positions.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
-    const [ua, ub, uc] = projectUV(a, b, c, uvScale);
+    const [ua, ub, uc] = projectUV(a, b, c, uvMetres);
     this.uvs.push(ua[0], ua[1], ub[0], ub[1], uc[0], uc[1]);
     return this;
   }
 
   /** Raw quad, split into two triangles, caller guarantees the winding. */
-  quad(a: V3, b: V3, c: V3, d: V3, uvScale = UV_METRES): this {
-    this.tri(a, b, c, uvScale);
-    this.tri(a, c, d, uvScale);
+  quad(a: V3, b: V3, c: V3, d: V3, uvMetres = UV_METRES): this {
+    this.tri(a, b, c, uvMetres);
+    this.tri(a, c, d, uvMetres);
     return this;
   }
 
   /** Triangle whose winding is fixed up so its normal agrees with `outward`. */
-  triOut(a: V3, b: V3, c: V3, outward: V3, uvScale = UV_METRES): this {
-    if (dot3(normalOf(a, b, c), outward) < 0) this.tri(a, c, b, uvScale);
-    else this.tri(a, b, c, uvScale);
+  triOut(a: V3, b: V3, c: V3, outward: V3, uvMetres = UV_METRES): this {
+    if (dot3(normalOf(a, b, c), outward) < 0) this.tri(a, c, b, uvMetres);
+    else this.tri(a, b, c, uvMetres);
     return this;
   }
 
   /** Quad whose winding is fixed up so its normal agrees with `outward`. */
-  quadOut(a: V3, b: V3, c: V3, d: V3, outward: V3, uvScale = UV_METRES): this {
-    if (dot3(normalOf(a, b, c), outward) < 0) this.quad(a, d, c, b, uvScale);
-    else this.quad(a, b, c, d, uvScale);
+  quadOut(a: V3, b: V3, c: V3, d: V3, outward: V3, uvMetres = UV_METRES): this {
+    if (dot3(normalOf(a, b, c), outward) < 0) this.quad(a, d, c, b, uvMetres);
+    else this.quad(a, b, c, d, uvMetres);
     return this;
   }
 
@@ -340,7 +346,7 @@ function revolve(
   segments: number,
   capBottom: boolean,
   capTop: boolean,
-  uvScale: number,
+  uvMetres: number,
 ): THREE.BufferGeometry {
   const s = new TriSoup();
   const n = Math.max(3, Math.round(segments));
@@ -357,10 +363,10 @@ function revolve(
       const s0 = Math.sin(a0);
       const c1 = Math.cos(a1);
       const s1 = Math.sin(a1);
-      const u0 = a0 * rRef * uvScale;
-      const u1 = a1 * rRef * uvScale;
-      const v0 = y0 * uvScale;
-      const v1 = y1 * uvScale;
+      const u0 = (a0 * rRef) / uvMetres;
+      const u1 = (a1 * rRef) / uvMetres;
+      const v0 = y0 / uvMetres;
+      const v1 = y1 / uvMetres;
       s.quadUV(
         [r0 * c0, y0, r0 * s0],
         [r0 * c1, y0, r0 * s1],
@@ -376,8 +382,8 @@ function revolve(
   }
   const first = profile[0] as V2;
   const last = profile[profile.length - 1] as V2;
-  if (capBottom && first[0] > 1e-5) capDisc(s, first[0], first[1], n, -1, uvScale);
-  if (capTop && last[0] > 1e-5) capDisc(s, last[0], last[1], n, 1, uvScale);
+  if (capBottom && first[0] > 1e-5) capDisc(s, first[0], first[1], n, -1, uvMetres);
+  if (capTop && last[0] > 1e-5) capDisc(s, last[0], last[1], n, 1, uvMetres);
   return s.geometry();
 }
 
@@ -387,7 +393,7 @@ function capDisc(
   y: number,
   segments: number,
   dir: 1 | -1,
-  uvScale: number,
+  uvMetres: number,
 ): void {
   const step = (Math.PI * 2) / segments;
   for (let i = 0; i < segments; i++) {
@@ -398,7 +404,7 @@ function capDisc(
       [radius * Math.cos(a0), y, radius * Math.sin(a0)],
       [radius * Math.cos(a1), y, radius * Math.sin(a1)],
       [0, dir, 0],
-      uvScale,
+      uvMetres,
     );
   }
 }
@@ -413,7 +419,7 @@ export function taperedBox(
   h: number,
   d: number,
   topScale = 0.8,
-  uvScale = UV_METRES,
+  uvMetres = UV_METRES,
 ): THREE.BufferGeometry {
   const s = new TriSoup();
   const hw = w / 2;
@@ -432,25 +438,27 @@ export function taperedBox(
     [tw, h, td],
     [-tw, h, td],
   ];
-  s.quadOut(bot[0], bot[1], bot[2], bot[3], [0, -1, 0], uvScale);
-  s.quadOut(top[0], top[1], top[2], top[3], [0, 1, 0], uvScale);
+  s.quadOut(bot[0], bot[1], bot[2], bot[3], [0, -1, 0], uvMetres);
+  s.quadOut(top[0], top[1], top[2], top[3], [0, 1, 0], uvMetres);
   for (let i = 0; i < 4; i++) {
     const j = (i + 1) % 4;
-    s.quadOut(bot[i], bot[j], top[j], top[i], [bot[i][0] + bot[j][0], 0, bot[i][2] + bot[j][2]], uvScale);
+    s.quadOut(bot[i], bot[j], top[j], top[i], [bot[i][0] + bot[j][0], 0, bot[i][2] + bot[j][2]], uvMetres);
   }
   return s.geometry();
 }
 
 /**
  * Box with flat 45-degree chamfers on all twelve edges and eight corners.
- * Built as six inset faces, twelve edge quads and eight corner triangles.
+ * Built as six inset faces, twelve edge quads and eight corner triangles,
+ * then stood on the ground like every other primitive: the box is written
+ * centred on the origin and lifted by h / 2, so it occupies y 0 .. h.
  */
 export function beveledBox(
   w: number,
   h: number,
   d: number,
   bevel = 0.05,
-  uvScale = UV_METRES,
+  uvMetres = UV_METRES,
 ): THREE.BufferGeometry {
   const half: P3 = [w / 2, h / 2, d / 2];
   const b = Math.max(1e-4, Math.min(bevel, half[0] * 0.49, half[1] * 0.49, half[2] * 0.49));
@@ -476,7 +484,7 @@ export function beveledBox(
       });
       const out: P3 = [0, 0, 0];
       out[f] = sign;
-      s.quadOut(pts[0], pts[1], pts[2], pts[3], out, uvScale);
+      s.quadOut(pts[0], pts[1], pts[2], pts[3], out, uvMetres);
     }
   }
   for (let a = 0; a < 3; a++) {
@@ -500,7 +508,7 @@ export function beveledBox(
           const out: P3 = [0, 0, 0];
           out[a] = sa;
           out[c] = sc;
-          s.quadOut(p0, p1, p2, p3, out, uvScale);
+          s.quadOut(p0, p1, p2, p3, out, uvMetres);
         }
       }
     }
@@ -513,30 +521,38 @@ export function beveledBox(
           [sx * (half[0] - b), sy * half[1], sz * (half[2] - b)],
           [sx * (half[0] - b), sy * (half[1] - b), sz * half[2]],
           [sx, sy, sz],
-          uvScale,
+          uvMetres,
         );
       }
     }
   }
-  return s.geometry();
+  const geometry = s.geometry();
+  geometry.translate(0, half[1], 0);
+  return geometry;
 }
 
-/** Cylinder with chamfered top and bottom rims, base at y = 0. */
+/**
+ * Cylinder with a real 45-degree chamfer cut into the top and bottom rims,
+ * base at y = 0. The wall runs at full `rBottom` / `rTop` between the
+ * chamfers; both cap discs are pulled in by the chamfer, so a cylinder with
+ * `h = 3`, `rBottom = 1`, `rTop = 0.5` is 1.0 across at the foot, 0.5 across
+ * at the crown, and 0.825 / 0.325 across the two flat rims.
+ */
 export function chamferedCylinder(
   rTop: number,
   rBottom: number,
   h: number,
   segments = 12,
-  uvScale = UV_METRES,
+  uvMetres = UV_METRES,
 ): THREE.BufferGeometry {
-  const rim = Math.max(1e-3, Math.min(h * 0.16, Math.min(rTop, rBottom) * 0.55));
+  const chamfer = Math.max(1e-3, Math.min(h * 0.16, Math.min(rTop, rBottom) * 0.35));
   const profile: V2[] = [
-    [rBottom, 0],
-    [rBottom, rim],
-    [rTop, h - rim],
-    [rTop, h],
+    [Math.max(0, rBottom - chamfer), 0],
+    [rBottom, chamfer],
+    [rTop, h - chamfer],
+    [Math.max(0, rTop - chamfer), h],
   ];
-  return revolve(profile, segments, true, true, uvScale);
+  return revolve(profile, segments, true, true, uvMetres);
 }
 
 /** Rectangular frustum standing on its base. */
@@ -546,7 +562,7 @@ export function truncatedPyramid(
   wTop: number,
   dTop: number,
   h: number,
-  uvScale = UV_METRES,
+  uvMetres = UV_METRES,
 ): THREE.BufferGeometry {
   const s = new TriSoup();
   const bw = wBottom / 2;
@@ -565,23 +581,23 @@ export function truncatedPyramid(
     [tw, h, td],
     [-tw, h, td],
   ];
-  s.quadOut(bot[0], bot[1], bot[2], bot[3], [0, -1, 0], uvScale);
-  s.quadOut(top[0], top[1], top[2], top[3], [0, 1, 0], uvScale);
+  s.quadOut(bot[0], bot[1], bot[2], bot[3], [0, -1, 0], uvMetres);
+  s.quadOut(top[0], top[1], top[2], top[3], [0, 1, 0], uvMetres);
   for (let i = 0; i < 4; i++) {
     const j = (i + 1) % 4;
-    s.quadOut(bot[i], bot[j], top[j], top[i], [bot[i][0] + bot[j][0], 0, bot[i][2] + bot[j][2]], uvScale);
+    s.quadOut(bot[i], bot[j], top[j], top[i], [bot[i][0] + bot[j][0], 0, bot[i][2] + bot[j][2]], uvMetres);
   }
   return s.geometry();
 }
 
 /** Hexagonal pillar with a chamfered top ring — the Protoss building base. */
-export function hexPrism(radius: number, height: number, uvScale = UV_METRES): THREE.BufferGeometry {
+export function hexPrism(radius: number, height: number, uvMetres = UV_METRES): THREE.BufferGeometry {
   const top = radius * 0.94;
-  return chamferedCylinder(top, radius, height, 6, uvScale);
+  return chamferedCylinder(top, radius, height, 6, uvMetres);
 }
 
 /** Sharp gem: a bipyramid resting on its lower point, apex at 2 * radius. */
-export function octahedron(radius: number, uvScale = UV_METRES): THREE.BufferGeometry {
+export function octahedron(radius: number, uvMetres = UV_METRES): THREE.BufferGeometry {
   const s = new TriSoup();
   const r = radius * 0.7071;
   const eq: V3[] = [
@@ -594,8 +610,8 @@ export function octahedron(radius: number, uvScale = UV_METRES): THREE.BufferGeo
   const foot: V3 = [0, 0, 0];
   for (let i = 0; i < 4; i++) {
     const j = (i + 1) % 4;
-    s.triOut(eq[i], eq[j], apex, [eq[i][0] + eq[j][0], 1, eq[i][2] + eq[j][2]], uvScale);
-    s.triOut(eq[j], eq[i], foot, [eq[i][0] + eq[j][0], -1, eq[i][2] + eq[j][2]], uvScale);
+    s.triOut(eq[i], eq[j], apex, [eq[i][0] + eq[j][0], 1, eq[i][2] + eq[j][2]], uvMetres);
+    s.triOut(eq[j], eq[i], foot, [eq[i][0] + eq[j][0], -1, eq[i][2] + eq[j][2]], uvMetres);
   }
   return s.geometry();
 }
@@ -606,18 +622,21 @@ export function cone(
   height: number,
   segments = 8,
   tipRadius = 0,
-  uvScale = UV_METRES,
+  uvMetres = UV_METRES,
 ): THREE.BufferGeometry {
   const profile: V2[] = [
     [radius, 0],
     [tipRadius, height],
   ];
-  return revolve(profile, segments, true, tipRadius > 1e-5, uvScale);
+  return revolve(profile, segments, true, tipRadius > 1e-5, uvMetres);
 }
 
 /**
- * Open or closed ring lying in the XZ plane, resting on the ground
- * (centre height = radius + tube). Used for pylon rings and turret collars.
+ * Open or closed ring lying flat in the XZ plane, resting on the ground: the
+ * tube's underside is tangent to y = 0 and the ring's centre sits at
+ * y = tube, so y runs 0 .. 2 * tube however large `radius` is. Used for pylon
+ * rings and turret collars; callers raise it with a translate, which puts the
+ * whole tube at the requested height rather than one `radius` above it.
  */
 export function torusSegment(
   radius: number,
@@ -625,13 +644,13 @@ export function torusSegment(
   arc = Math.PI * 2,
   tubularSegments = 16,
   radialSegments = 8,
-  uvScale = UV_METRES,
+  uvMetres = UV_METRES,
 ): THREE.BufferGeometry {
   const s = new TriSoup();
   const steps = Math.max(2, Math.round(tubularSegments));
   const rSteps = Math.max(3, Math.round(radialSegments));
   const closed = arc >= Math.PI * 2 - 1e-6;
-  const centreY = radius + tube;
+  const centreY = tube;
   const point = (ti: number, ri: number): V3 => {
     const theta = arc * (ti / steps);
     const phi = (Math.PI * 2 * ri) / rSteps;
@@ -648,7 +667,7 @@ export function torusSegment(
       const c = point(ti + 1, ri + 1);
       const d = point(ti + 1, ri);
       const mid: P3 = [(a[0] + c[0]) / 2, (a[1] + c[1]) / 2 - centreY, (a[2] + c[2]) / 2];
-      s.quadOut(a, b, c, d, mid, uvScale);
+      s.quadOut(a, b, c, d, mid, uvMetres);
     }
   }
   if (!closed) {
@@ -660,7 +679,7 @@ export function torusSegment(
           ? [Math.sin(theta), 0, -Math.cos(theta)]
           : [-Math.sin(theta), 0, Math.cos(theta)];
       for (let ri = 0; ri < rSteps; ri++) {
-        s.triOut(centre, point(end, ri), point(end, ri + 1), outward, uvScale);
+        s.triOut(centre, point(end, ri), point(end, ri + 1), outward, uvMetres);
       }
     }
   }
@@ -672,7 +691,7 @@ export function sphereLowPoly(
   radius: number,
   widthSegments = 8,
   heightSegments = 6,
-  uvScale = UV_METRES,
+  uvMetres = UV_METRES,
 ): THREE.BufferGeometry {
   const hs = Math.max(2, Math.round(heightSegments));
   const profile: V2[] = [];
@@ -680,7 +699,7 @@ export function sphereLowPoly(
     const a = -Math.PI / 2 + (Math.PI * i) / hs;
     profile.push([Math.cos(a) * radius, radius + Math.sin(a) * radius]);
   }
-  return revolve(profile, widthSegments, false, false, uvScale);
+  return revolve(profile, widthSegments, false, false, uvMetres);
 }
 
 /** Upright capsule: total height is `length + 2 * radius`, base at y = 0. */
@@ -689,7 +708,7 @@ export function capsule(
   length: number,
   capSegments = 4,
   radialSegments = 10,
-  uvScale = UV_METRES,
+  uvMetres = UV_METRES,
 ): THREE.BufferGeometry {
   const cs = Math.max(2, Math.round(capSegments));
   const profile: V2[] = [];
@@ -703,7 +722,7 @@ export function capsule(
     const a = (Math.PI * 0.5 * i) / cs;
     profile.push([Math.cos(a) * radius, radius + straight + Math.sin(a) * radius]);
   }
-  return revolve(profile, radialSegments, false, false, uvScale);
+  return revolve(profile, radialSegments, false, false, uvMetres);
 }
 
 /**
@@ -750,26 +769,26 @@ export function treadedBlock(
   h: number,
   d: number,
   treads = 6,
-  uvScale = UV_METRES,
+  uvMetres = UV_METRES,
 ): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [];
-  parts.push(beveledBox(w * 0.86, h, d, Math.min(0.05, h * 0.25), uvScale));
+  parts.push(beveledBox(w * 0.86, h, d, Math.min(0.05, h * 0.25), uvMetres));
   const ridgeH = h * 0.78;
   const ridgeY = h * 0.11;
   const count = Math.max(2, Math.round(treads));
   const step = d / count;
   for (const side of [1, -1]) {
     for (let i = 0; i < count; i++) {
-      const ridge = taperedBox(w * 0.14, ridgeH, step * 0.62, 0.8, uvScale);
+      const ridge = taperedBox(w * 0.14, ridgeH, step * 0.62, 0.8, uvMetres);
       ridge.translate(side * w * 0.45, ridgeY, -d / 2 + step * (i + 0.5));
       parts.push(ridge);
     }
     // End rollers sit so their disc is tangent to the ground plane.
-    const roller = chamferedCylinder(h * 0.3, h * 0.3, w * 0.1, 8, uvScale);
+    const roller = chamferedCylinder(h * 0.3, h * 0.3, w * 0.1, 8, uvMetres);
     roller.rotateZ(side * -Math.PI * 0.5);
     roller.translate(side * w * 0.5, h * 0.3, d * 0.36);
     parts.push(roller);
-    const rollerBack = chamferedCylinder(h * 0.3, h * 0.3, w * 0.1, 8, uvScale);
+    const rollerBack = chamferedCylinder(h * 0.3, h * 0.3, w * 0.1, 8, uvMetres);
     rollerBack.rotateZ(side * -Math.PI * 0.5);
     rollerBack.translate(side * w * 0.5, h * 0.3, -d * 0.36);
     parts.push(rollerBack);
@@ -959,8 +978,17 @@ export interface FitOptions {
 
 /**
  * Squeezes a model onto the roster's `size` so the visual footprint and the
- * server's collision circle agree: horizontal extent lands on `radius` and the
- * silhouette tops out at `height`, both measured from the base-centre origin.
+ * server's collision circle agree: the silhouette tops out at `height` and no
+ * vertex sits further from the origin than `radius`, both measured from the
+ * ground-contact origin the builders hand in.
+ *
+ * The scale is taken about that origin, not about the model's own bottom or
+ * centre: a hull that was built floating at y = 0.7 is grown 1.5x to y = 1.05,
+ * not to 2.55, and a hull built half a metre off centre is measured against
+ * the circle the server actually blocks against rather than against its own
+ * middle. The model is never translated — seating it on the ground is the
+ * caller's job, and its deliberate front-to-back asymmetry is part of its
+ * silhouette.
  */
 export function fitFootprint(
   geometry: THREE.BufferGeometry,
@@ -974,24 +1002,20 @@ export function fitFootprint(
   const overshoot = opts.maxOvershoot ?? 1.12;
   const fillRadius = opts.fillRadius ?? 0.8;
   const fillHeight = opts.fillHeight ?? 0.86;
-  const halfX = (bb.max.x - bb.min.x) / 2;
-  const halfZ = (bb.max.z - bb.min.z) / 2;
-  const reach = Math.max(halfX, halfZ);
-  const cx = (bb.max.x + bb.min.x) / 2;
-  const cz = (bb.max.z + bb.min.z) / 2;
+  // The reach is the furthest vertex from the collision centre, not the
+  // model's own half-extent: an off-centre hull is exactly the case this has
+  // to catch. Measuring half the width lets a model built 30 cm off centre
+  // keep a barrel well past the circle the server blocks against.
+  const reach = Math.max(bb.max.x, -bb.min.x, bb.max.z, -bb.min.z);
   let sx = 1;
   if (reach > radius * overshoot) sx = radius / Math.max(reach, 1e-5);
   else if (reach < radius * fillRadius) sx = (radius * fillRadius) / Math.max(reach, 1e-5);
   const top = bb.max.y;
-  const bottom = bb.min.y;
-  const span = Math.max(1e-5, top - bottom);
   let sy = 1;
-  if (top > height) sy = height / top;
-  else if (span < height * fillHeight) sy = (height * fillHeight) / span;
-  if (sx !== 1 || sy !== 1) {
-    geometry.scale(sx, sy, sx);
-    geometry.translate(-cx * (sx - 1), -bottom * (sy - 1), -cz * (sx - 1));
-  }
+  if (top > height) sy = height / Math.max(top, 1e-5);
+  else if (top < height * fillHeight) sy = (height * fillHeight) / Math.max(top, 1e-5);
+  if (sx !== 1) geometry.scale(sx, 1, sx);
+  if (sy !== 1) geometry.scale(1, sy, 1);
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return geometry;

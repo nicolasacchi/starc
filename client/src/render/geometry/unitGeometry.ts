@@ -11,8 +11,9 @@
  * `movement === "air"` decides whether the model hovers and gets a shadow
  * decal.
  *
- * Conventions (enforced by `fitFootprint` and `selfCheckGeometryCoverage`):
- *  - origin at the base centre, y = 0 is the ground contact plane;
+ * Conventions (enforced by `assemble` and `checkGeometry`):
+ *  - y = 0 is the ground contact plane: a ground unit's base sits on it and
+ *    an air hull's base sits exactly one `airHoverLift` above it;
  *  - the model faces +Z;
  *  - horizontal extent stays inside the collision radius and the silhouette
  *    tops out at the roster height, so what you see is what the server blocks.
@@ -29,7 +30,7 @@
  */
 import * as THREE from "three";
 import { GAME, entityDef } from "@shared/gameData";
-import type { UnitDef } from "@shared/protocol";
+import type { EntityDef, UnitDef } from "@shared/protocol";
 import { TONES } from "@render/materials/palette";
 import {
   PartList,
@@ -1079,10 +1080,17 @@ function assemble(def: UnitDef): THREE.BufferGeometry {
     parts: new PartList(),
   };
   builder(build);
-  // Air hulls float: the clearance comes out of the height budget so the
+  // Air hulls float: the clearance comes out of the height budget, so the
   // silhouette still tops out at the roster height.
   const lift = build.air ? airHoverLift(def.size.height) : 0;
   const body = build.parts.merge();
+  // Seat the model before the fit: a ground unit stands on the ground plane
+  // and an air hull starts one lift above it, whatever height the builder
+  // happened to hang its lowest part at. The fit then measures the silhouette
+  // from the ground plane, which is where the roster measures it from too.
+  body.computeBoundingBox();
+  const base = body.boundingBox?.min.y ?? 0;
+  if (base !== 0) body.translate(0, -base, 0);
   fitFootprint(body, def.size.radius, def.size.height - lift);
   if (lift > 0) body.translate(0, lift, 0);
   return body;
@@ -1100,42 +1108,126 @@ export interface GeometryCheck {
   triangles: number;
   radius: number;
   height: number;
+  /** Furthest vertex from the origin in the XZ plane, in metres. */
+  reach: number;
+  /** Lowest vertex, in metres: 0 for ground models, the hover lift for air. */
+  base: number;
+  /** The y the model is contractually seated at. */
+  expectedBase: number;
+  /** Highest vertex, in metres. */
+  top: number;
+}
+
+/** Slack allowed on every fitted dimension, in metres. */
+export const FIT_TOLERANCE = 1e-3;
+
+/**
+ * The `maxOvershoot` each builder hands `fitFootprint`: a building must match
+ * its collision circle exactly, a unit may let a weapon barrel poke past it.
+ * The self-check asserts the same budget the builders were given.
+ */
+export function footprintOvershoot(kind: "unit" | "building"): number {
+  return kind === "building" ? 1.0 : 1.12;
+}
+
+/** What the check measured, whether the model passed or not. */
+export interface GeometryMeasurement {
+  triangles: number;
+  reach: number;
+  base: number;
+  top: number;
+}
+
+/**
+ * The single geometry contract every roster key has to satisfy: a rendered,
+ * vertex-coloured, UV'd buffer that sits on the ground (or one hover lift
+ * above it, for an air hull), stays inside the collision circle's documented
+ * overshoot, and does not out-top its roster height. Returns the measurement
+ * it took and an empty string when the model passes, or the reason it does
+ * not. Split out from the walk below so a deliberately broken model can be
+ * checked against the same rules the roster is.
+ */
+export function checkGeometry(
+  def: EntityDef,
+  geometry: THREE.BufferGeometry,
+): { measurement: GeometryMeasurement; reason: string } {
+  const position = geometry.getAttribute("position");
+  const triangles = position ? (position.count / 3) | 0 : 0;
+  const measurement: GeometryMeasurement = { triangles, reach: 0, base: 0, top: 0 };
+  if (triangles === 0) return { measurement, reason: "empty geometry" };
+  if (geometry.getAttribute("color")?.count !== position.count) {
+    return { measurement, reason: "vertex colour attribute does not match the position attribute" };
+  }
+  if (!geometry.getAttribute("uv")) return { measurement, reason: "uv attribute missing" };
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox;
+  if (!box) return { measurement, reason: "no bounding box" };
+  measurement.reach = Math.max(box.max.x, -box.min.x, box.max.z, -box.min.z);
+  measurement.base = box.min.y;
+  measurement.top = box.max.y;
+  const lift = def.kind === "unit" && def.movement === "air" ? airHoverLift(def.size.height) : 0;
+  if (Math.abs(measurement.base - lift) > FIT_TOLERANCE) {
+    return {
+      measurement,
+      reason:
+        lift > 0
+          ? `hover clearance is ${measurement.base.toFixed(3)}, not the ${lift.toFixed(3)} lift`
+          : `base is ${measurement.base.toFixed(3)}, not the ground plane`,
+    };
+  }
+  if (measurement.reach > def.size.radius * footprintOvershoot(def.kind) + FIT_TOLERANCE) {
+    return {
+      measurement,
+      reason: `footprint ${measurement.reach.toFixed(3)} exceeds collision radius ${def.size.radius}`,
+    };
+  }
+  if (measurement.top > def.size.height + FIT_TOLERANCE) {
+    return {
+      measurement,
+      reason: `taller than roster height ${def.size.height} (${measurement.top.toFixed(3)})`,
+    };
+  }
+  return { measurement, reason: "" };
 }
 
 /**
  * Walks every key in the roster and rebuilds its geometry, checking that it is
- * non-empty, coloured, base-centred and inside the collision footprint.
- * Development aid: run it from a test or a boot-time assert, never per frame.
+ * non-empty, coloured, seated at the y the roster implies and inside the
+ * collision footprint. Development aid: run it from a test or a boot-time
+ * assert, never per frame.
  */
 export function selfCheckGeometryCoverage(): GeometryCheck[] {
   const results: GeometryCheck[] = [];
   for (const key of Object.keys(GAME.units)) {
     const def = entityDef(key);
-    const radius = def.size.radius;
     const height = def.size.height;
+    const lift = def.kind === "unit" && def.movement === "air" ? airHoverLift(height) : 0;
     let geometry: THREE.BufferGeometry | null = null;
     let reason = "ok";
-    let triangles = 0;
+    let measurement: GeometryMeasurement = { triangles: 0, reach: 0, base: 0, top: 0 };
     try {
       geometry = buildAnyGeometry(key);
-      triangles = (geometry.getAttribute("position").count / 3) | 0;
-      geometry.computeBoundingBox();
-      const box = geometry.boundingBox;
-      if (triangles === 0) reason = "empty geometry";
-      else if (geometry.getAttribute("color")?.count !== geometry.getAttribute("position").count) {
-        reason = "vertex colour attribute does not match the position attribute";
-      } else if (!geometry.getAttribute("uv")) reason = "uv attribute missing";
-      else if (!box) reason = "no bounding box";
-      else if (box.min.y < -0.02) reason = `origin below ground (${box.min.y.toFixed(3)})`;
-      else if (Math.max(box.max.x, -box.min.x, box.max.z, -box.min.z) > radius * 1.13) {
-        reason = `footprint exceeds collision radius ${radius}`;
-      } else if (box.max.y > height * 1.06) reason = `taller than roster height ${height}`;
+      const checked = checkGeometry(def, geometry);
+      measurement = checked.measurement;
+      reason = checked.reason === "" ? "ok" : checked.reason;
     } catch (error) {
       reason = error instanceof Error ? error.message : String(error);
     } finally {
       geometry?.dispose();
     }
-    results.push({ key, kind: def.kind, ok: reason === "ok", reason, triangles, radius, height });
+    results.push({
+      key,
+      kind: def.kind,
+      ok: reason === "ok",
+      reason,
+      triangles: measurement.triangles,
+      radius: def.size.radius,
+      height,
+      reach: measurement.reach,
+      base: measurement.base,
+      expectedBase: lift,
+      top: measurement.top,
+    });
   }
   return results;
 }

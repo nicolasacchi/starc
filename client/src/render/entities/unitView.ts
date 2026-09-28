@@ -221,7 +221,7 @@ export class UnitView extends AbstractEntityView {
 
   /** Called by `SceneManager` for every `shot` event fired by this unit. */
   onShot(): void {
-    this.recoilVelocity -= this.recoilKick;
+    this.recoilVelocity += this.recoilKick;
   }
 
   override setHp(hp: number, max: number, shield: number, maxShield: number): void {

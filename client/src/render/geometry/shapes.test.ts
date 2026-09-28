@@ -130,16 +130,19 @@ describe("TriSoup", () => {
     expect(boxOf(g)).toEqual(new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 1, 0)));
   });
 
-  it("scales UVs by the requested metres-per-tile", () => {
+  it("divides UVs by the requested metres-per-tile", () => {
     const readMaxU = (g: THREE.BufferGeometry): number => {
       const uv = g.getAttribute("uv");
       let max = -Infinity;
       for (let i = 0; i < uv.count; i++) max = Math.max(max, uv.getX(i));
       return max;
     };
-    const plain = new TriSoup().quad([0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], 1).geometry();
-    const scaled = new TriSoup().quad([0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], 4).geometry();
-    expect(readMaxU(scaled)).toBeCloseTo(readMaxU(plain) * 4, 5);
+    // A tile 1 m wide packs four repeats into the 1 m quad; a 4 m tile packs
+    // a quarter of one, so halving the metres doubles the repeat count.
+    const fine = new TriSoup().quad([0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], 1).geometry();
+    const coarse = new TriSoup().quad([0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], 4).geometry();
+    expect(readMaxU(fine)).toBeCloseTo(1, 5);
+    expect(readMaxU(coarse)).toBeCloseTo(readMaxU(fine) / 4, 5);
   });
 
   it("triOut reverses the winding so the face points at `outward`", () => {
@@ -326,7 +329,10 @@ describe("beveledBox", () => {
     const g = beveledBox(2, 2, 2, 0.2);
     const b = boxOf(g);
     expect(b.max.x).toBeCloseTo(1, 5);
-    expect(b.max.y).toBeCloseTo(1, 5);
+    // The box stands on the ground like every other primitive, so its 2 m
+    // of height runs 0 .. 2 rather than -1 .. 1.
+    expect(b.min.y).toBeCloseTo(0, 5);
+    expect(b.max.y).toBeCloseTo(2, 5);
     expect(topFaceSpan(g)).toBeCloseTo(2 * (1 - 0.2), 5);
   });
 
@@ -336,12 +342,13 @@ describe("beveledBox", () => {
     expect(tris(g)).toBe(44);
   });
 
-  it("is centred on the origin, not based at y = 0 like every other primitive", () => {
-    // Documented divergence: `treadedBlock` embeds this box directly, so a
-    // tracked hull starts out half-buried.
+  it("is based at y = 0, so a hull built from it is not born half buried", () => {
+    // This single convention is what `treadedBlock` and `hullBlock` embed
+    // directly; when beveledBox was centred on the origin every tracked hull
+    // and every greebled structure started below the ground plane.
     const b = boxOf(beveledBox(2, 2, 2));
-    expect(b.min.y).toBeCloseTo(-1, 5);
-    expect(b.max.y).toBeCloseTo(1, 5);
+    expect(b.min.y).toBeCloseTo(0, 5);
+    expect(b.max.y).toBeCloseTo(2, 5);
   });
 });
 
@@ -361,11 +368,10 @@ describe("chamferedCylinder / hexPrism", () => {
     expect(verts(chamferedCylinder(1, 1, 2, 12))).toBeGreaterThan(verts(cone(1, 2, 12, 1)));
   });
 
-  it("leaves both rims at full radius — it does not actually chamfer them", () => {
-    // KNOWN DEFECT: the name promises "chamfered top and bottom rims" but the
-    // profile is [rBottom,0],[rBottom,rim],[rTop,h-rim],[rTop,h] — a straight
-    // taper with a shortened wall. No vertex is ever pulled in, so a hull
-    // that should read as a machined rim reads as a plain cone. Pinned.
+  it("pulls both rims in by the chamfer instead of leaving them at full radius", () => {
+    // chamfer = min(h * 0.16, min(rTop, rBottom) * 0.35) = 0.175 for
+    // (rTop 0.5, rBottom 1, h 3): the wall carries the full 1.0 and 0.5, the
+    // two flat rims sit 0.175 inboard of them.
     const g = chamferedCylinder(0.5, 1, 3, 24);
     const p = g.getAttribute("position");
     const radiusAt = (y: number): number => {
@@ -375,22 +381,19 @@ describe("chamferedCylinder / hexPrism", () => {
       }
       return max;
     };
-    expect(radiusAt(0)).toBeCloseTo(1, 3);
-    expect(radiusAt(3)).toBeCloseTo(0.5, 3);
-    expect(radiusAt(0.275)).toBeCloseTo(1, 3);
-    expect(radiusAt(2.725)).toBeCloseTo(0.5, 3);
+    expect(radiusAt(0)).toBeCloseTo(0.825, 3);
+    expect(radiusAt(3)).toBeCloseTo(0.325, 3);
+    expect(radiusAt(0.175)).toBeCloseTo(1, 3);
+    expect(radiusAt(2.825)).toBeCloseTo(0.5, 3);
   });
 
-  it("tapers linearly between the two rim radii, with no intermediate rings", () => {
-    // rim = min(h * 0.16, min(rTop, rBottom) * 0.55) = 0.275, so the wall is
-    // a single straight run from (1, 0.275) to (0.5, 2.725) and every vertex
-    // in between lies on that line.
+  it("tapers the wall linearly between the two rim radii", () => {
     const g = chamferedCylinder(0.5, 1, 3, 24);
     const p = g.getAttribute("position");
     for (let i = 0; i < p.count; i++) {
       const y = p.getY(i);
-      if (y < 0.01 || y > 2.99) continue; // the cap discs sit off the wall
-      const expectedR = 1 + (0.5 - 1) * ((y - 0.275) / 2.45);
+      if (y < 0.18 || y > 2.82) continue; // the chamfers and cap discs
+      const expectedR = 1 + (0.5 - 1) * ((y - 0.175) / 2.65);
       expect(Math.hypot(p.getX(i), p.getZ(i))).toBeCloseTo(expectedR, 3);
     }
   });
@@ -480,7 +483,7 @@ describe("torusSegment", () => {
     const g = torusSegment(1, 0.25, Math.PI * 2, 12, 6);
     const at = (theta: number, phi: number): [number, number, number] => [
       Math.cos(theta) * (1 + Math.cos(phi) * 0.25),
-      1.25 + Math.sin(phi) * 0.25,
+      0.25 + Math.sin(phi) * 0.25,
       Math.sin(theta) * (1 + Math.cos(phi) * 0.25),
     ];
     const a = at(0, 0.4);
@@ -490,17 +493,19 @@ describe("torusSegment", () => {
     expect(verts(g)).toBeGreaterThan(0);
   });
 
-  it("sits with its centre at radius + tube", () => {
+  it("rests on the ground: the tube is tangent to y = 0 whatever the radius", () => {
+    // The ring used to sit one full radius in the air, so every pylon ring
+    // and turret collar was drawn floating unless its caller compensated.
     const b = boxOf(torusSegment(1, 0.25, Math.PI * 2, 16, 8));
-    expect((b.min.y + b.max.y) / 2).toBeCloseTo(1.25, 5);
+    expect(b.min.y).toBeCloseTo(0, 5);
+    expect((b.min.y + b.max.y) / 2).toBeCloseTo(0.25, 5);
+    expect(b.max.y).toBeCloseTo(0.5, 5);
   });
 
-  it("floats its ring at y = radius, not on the ground as the docstring claims", () => {
-    // KNOWN DEFECT: the docstring says "resting on the ground (centre height =
-    // radius + tube)". Only the centre height is right — the tube lifts the
-    // whole ring, so an untransformed torus hovers one radius in the air.
-    const b = boxOf(torusSegment(1, 0.25, Math.PI * 2, 16, 8));
-    expect(b.min.y).toBeCloseTo(1, 5);
+  it("rests on the ground however large the ring is", () => {
+    const big = boxOf(torusSegment(4, 0.3, Math.PI * 2, 16, 8));
+    expect(big.min.y).toBeCloseTo(0, 5);
+    expect(big.max.y).toBeCloseTo(0.6, 5);
   });
 
   it("only sweeps the requested arc", () => {
@@ -612,11 +617,13 @@ describe("treadedBlock", () => {
     expect(b.max.x).toBeGreaterThan(1);
   });
 
-  it("inherits beveledBox's centred origin, so half the hull sits below y = 0", () => {
-    // This is the root of every sub-zero `min.y` in the roster (scv -0.18 m,
-    // siege tank -0.24 m, command centre -0.52 m): the body box is centred and
-    // nothing re-seats it before the footprint fit runs.
-    expect(boxOf(treadedBlock(2, 1, 3, 4)).min.y).toBeCloseTo(-0.5, 3);
+  it("stands on the ground, because its hull box does", () => {
+    // This is what every tracked hull in the roster is built from; while
+    // beveledBox was centred on the origin the whole vehicle was born half
+    // buried (scv -0.18 m, siege tank -0.24 m, command centre -0.52 m).
+    const b = boxOf(treadedBlock(2, 1, 3, 4));
+    expect(b.min.y).toBeCloseTo(0, 3);
+    expect(b.max.y).toBeCloseTo(1, 3);
   });
 });
 
@@ -748,13 +755,24 @@ describe("fitFootprint", () => {
     expect(allFinite(g)).toBe(true);
   });
 
-  it("overshoots the height budget when it grows a model already off the ground", () => {
-    // KNOWN DEFECT (the phoenix in the roster, 16% over its 2.5 m height):
-    // the fillHeight branch scales about the model's own bottom instead of the
-    // ground plane, so a hull floating at y = 0.7 is scaled 1.53x and ends at
-    // y = 2.55 for a 2.15 m budget. Pinned here, not fixed.
-    const g = fitFootprint(taperedBox(1, 1.21, 1, 1).translate(0, 0.7, 0), 0.75, 2.15);
-    expect(boxOf(g).max.y).toBeCloseTo(2.549, 2);
+  it("scales about the ground plane, not about the model's own bottom", () => {
+    // A hull the builder already lifted 0.7 m (the phoenix in the roster) is
+    // grown to the same top either way, so a fit anchored on its own bottom
+    // used to end at 2.55 m against a 2.15 m budget. Scaling about y = 0
+    // lifts the base with the top, so the model keeps its stance.
+    const g = fitFootprint(taperedBox(1, 0.5, 1, 1).translate(0, 0.7, 0), 0.75, 2.15);
+    const b = boxOf(g);
+    expect(b.max.y).toBeCloseTo(0.86 * 2.15, 4);
+    expect(b.min.y).toBeCloseTo(0.7 * (0.86 * 2.15) / 1.2, 4);
+  });
+
+  it("measures the reach from the collision centre, not from the model's middle", () => {
+    // An off-centre hull is exactly what the reach has to catch: a barrel
+    // reaching 0.577 m against a 0.5 m circle (the high templar) is out of
+    // budget even though the model's own half width is only 0.288 m.
+    const off = taperedBox(0.576, 1, 0.3, 1).translate(0.288, 0, 0);
+    const b = boxOf(fitFootprint(off, 0.5, 10, { fillRadius: 0 }));
+    expect(Math.max(b.max.x, -b.min.x, b.max.z, -b.min.z)).toBeCloseTo(0.5, 3);
   });
 
   it("returns the same geometry instance it was handed", () => {
@@ -764,18 +782,29 @@ describe("fitFootprint", () => {
 });
 
 describe("UV_METRES", () => {
-  it("is applied as a multiplier, so one UV unit spans 2 m, not 0.5 m", () => {
-    // KNOWN DEFECT: the constant is documented as "world metres covered by
-    // one texture tile" (0.5 m) but is used as a per-metre multiplier
-    // (uv = position * 0.5), which puts the repeat at 1 / 0.5 = 2 m — the
-    // procedural textures are stretched 4x finer... rather 4x coarser than
-    // documented. Pinned, not fixed.
-    expect(UV_METRES).toBeCloseTo(0.5, 6);
+  it("is the world length of one texture tile, applied as a divisor", () => {
+    // The constant is a length, so the derivation has to divide by it: used
+    // as a multiplier, a "0.5 m tile" would stretch a repeat over 2 m and
+    // render the procedural textures four times coarser than documented.
+    expect(UV_METRES).toBeCloseTo(2, 6);
     const uv = taperedBox(2, 2, 2, 1, UV_METRES).getAttribute("uv");
     let max = -Infinity;
     for (let i = 0; i < uv.count; i++) max = Math.max(max, uv.getX(i), uv.getY(i));
-    // The 2 m tall side face projects onto y: 2 m * 0.5 = 1 UV unit.
+    // The 2 m tall side face projects onto y: 2 m / 2 m = 1 UV unit, exactly
+    // one repeat of the tile.
     expect(max).toBeCloseTo(1, 5);
+  });
+
+  it("packs one repeat per UV_METRES of surface, whatever the tile size", () => {
+    const spans = (uvMetres: number): number => {
+      const uv = taperedBox(2, 2, 2, 1, uvMetres).getAttribute("uv");
+      let max = 0;
+      for (let i = 0; i < uv.count; i++) max = Math.max(max, uv.getX(i), uv.getY(i));
+      return max;
+    };
+    expect(spans(UV_METRES)).toBeCloseTo(1, 5);
+    expect(spans(UV_METRES / 2)).toBeCloseTo(2, 5);
+    expect(spans(UV_METRES * 2)).toBeCloseTo(0.5, 5);
   });
 });
 

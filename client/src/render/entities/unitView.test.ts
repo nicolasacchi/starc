@@ -289,26 +289,31 @@ describe("UnitView animation", () => {
     u.dispose();
   });
 
-  it("kicks backwards on a shot and springs back to rest", () => {
+  it("kicks the chassis backwards along the facing and springs back to rest", () => {
     const u = view(1, "marine");
     u.setTransform(0, 0, 0, 0);
     u.update(0.1);
     u.onShot();
     u.update(0.02);
-    // Local +Z is forward, so a recoil is a negative Z displacement.
-    expect(u.rig.chassis.position.z).toBeLessThan(0);
-  it("kicks the chassis on a shot and springs back to rest", () => {
-    const u = view(1, "marine");
-    u.setTransform(0, 0, 0, 0);
-    u.update(0.1);
-    u.onShot();
-    u.update(0.02);
-    // The impulse must actually move the model, not just internal state.
-    expect(Math.abs(u.rig.chassis.position.z)).toBeGreaterThan(0.001);
+    // The model faces +Z, so recoil must move the chassis towards -Z: a kick in
+    // the other direction lurches the unit forwards at whatever it is shooting.
+    expect(u.rig.chassis.position.z).toBeLessThan(-0.001);
     for (let i = 0; i < 200; i++) u.update(0.02);
     expect(u.rig.chassis.position.z).toBeCloseTo(0, 4);
     u.dispose();
   });
+
+  it("kicks a heavy chassis backwards too, not just forwards", () => {
+    const tank = view(2, "siege_tank");
+    tank.setTransform(0, 0, 0, 0);
+    tank.update(0.1);
+    tank.onShot();
+    tank.update(0.02);
+    expect(tank.rig.chassis.position.z).toBeLessThan(-0.001);
+    tank.dispose();
+  });
+
+  it("kicks harder for a heavier weapon than for a light one", () => {
     const marine = view(1, "marine");
     const tank = view(2, "siege_tank");
     marine.setTransform(0, 0, 0, 0);
@@ -316,6 +321,9 @@ describe("UnitView animation", () => {
     marine.update(0.1);
     tank.update(0.1);
     marine.onShot();
+    tank.onShot();
+    marine.update(0.02);
+    tank.update(0.02);
     expect(Math.abs(tank.rig.chassis.position.z)).toBeGreaterThan(Math.abs(marine.rig.chassis.position.z));
     marine.dispose();
     tank.dispose();

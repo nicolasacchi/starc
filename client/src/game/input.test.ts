@@ -152,6 +152,7 @@ function scv(id: number, over: Partial<ProtocolEntity> = {}): ProtocolEntity {
 
 interface Harness {
   controller: InputController;
+  element: FakeElement;
   sent: Command[];
   /** Ownership and aliveness of every entity each command named, at emit time. */
   legality: { c: CommandType; ids: number[]; owner: ({ pl: number; st: string } | null)[] }[];
@@ -160,6 +161,7 @@ interface Harness {
   ghosts: (PlacementGhost | null)[];
   selectionEvents: { ids: number[]; overflow: number }[];
   terrain: InputTerrain;
+  wheel: (deltaY: number) => void;
   press: (over?: Parameters<typeof pointerEvent>[0]) => void;
   move: (over?: Parameters<typeof pointerEvent>[0]) => void;
   release: (over?: Parameters<typeof pointerEvent>[0]) => void;
@@ -257,6 +259,7 @@ function harness(
     ghosts,
     selectionEvents,
     terrain,
+    wheel: (deltaY) => element.fire("wheel", wheelEvent(deltaY)),
     press,
     move,
     release,
@@ -572,7 +575,7 @@ describe("selection", () => {
     }
 
     expect(h.sent).toHaveLength(MAX_QUEUED_ORDERS + 1);
-    expect(h.sent.every((c) => c.queue === true)).toBe(true);
+    expect(h.sent.every((c) => "queue" in c && c.queue === true)).toBe(true);
   });
 });
 
@@ -847,8 +850,8 @@ describe("camera", () => {
   it("zooms in on a wheel-up and out on a wheel-down", () => {
     h = harness([]);
 
-    h.element.fire("wheel", wheelEvent(-120));
-    h.element.fire("wheel", wheelEvent(120));
+    h.wheel(-120);
+    h.wheel(120);
 
     expect(h.intents).toEqual([
       { kind: "zoom", steps: 0.12 },

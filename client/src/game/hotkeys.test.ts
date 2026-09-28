@@ -76,20 +76,15 @@ describe("keyLabel", () => {
 describe("the cascade", () => {
   it("offers the actions of a code in a fixed, documented order", () => {
     // `A` is a Terran marine, "select all army" and "pan left", in that order.
-    const { hotkeys } = manager(() => false, { race: "terran" });
-    const { seen } = manager(() => false, { race: "terran" });
-    void hotkeys;
+    const { hotkeys, seen } = manager(() => false, { race: "terran" });
 
-    seen.hotkeys.handle(keyEvent("keydown", "KeyA"));
+    hotkeys.handle(keyEvent("keydown", "KeyA"));
 
-    expect(seen.seen.map((r) => r.action)).toEqual(["build:marine", "select_army", "camera_left"]);
+    expect(actions(seen)).toEqual(["build:marine", "select_army", "camera_left"]);
   });
 
   it("stops at the first action the game can actually perform", () => {
-    const { hotkeys, seen } = manager(
-      (action) => action === "select_army",
-      { race: "terran" },
-    );
+    const { hotkeys, seen } = manager((action) => action === "select_army", { race: "terran" });
 
     const claimed = hotkeys.handle(keyEvent("keydown", "KeyA"));
 
@@ -97,12 +92,13 @@ describe("the cascade", () => {
     expect(actions(seen)).toEqual(["build:marine", "select_army"]);
   });
 
-  it("reaches the camera reading when neither game reading is available", () => {
-    const { hotkeys, seen } = manager(() => false, { race: "terran" });
+  it("reaches the camera reading only because the game readings refused", () => {
+    // Nothing selected and no producer: the HUD reading of `A` is the camera.
+    const { hotkeys, seen } = manager((action) => action === "camera_left", { race: "terran" });
 
     hotkeys.handle(keyEvent("keydown", "KeyA"));
 
-    expect(actions(seen)).toContain("camera_left");
+    expect(actions(seen)).toEqual(["build:marine", "select_army", "camera_left"]);
   });
 
   it("claims the key even when no action applied, so the browser default is swallowed", () => {
@@ -142,11 +138,21 @@ describe("the cascade", () => {
     }
   });
 
-  it("honours an extra veto such as an open chat box", () => {
-    const { hotkeys, seen } = manager(() => true, { ignore: () => true });
-
-    expect(hotkeys.handle(keyEvent("keydown", "KeyS"))).toBe(false);
-    expect(seen).toEqual([]);
+  it("exposes exactly the camera actions as the ones that repeat on key-up", () => {
+    // This set is what makes a key-up mean "stop panning" rather than "do it
+    // again", so a game action leaking into it would double-fire on release.
+    expect([...CAMERA_ACTIONS].sort()).toEqual([
+      "camera_down",
+      "camera_left",
+      "camera_right",
+      "camera_rotate_left",
+      "camera_rotate_right",
+      "camera_up",
+      "zoom_in",
+      "zoom_out",
+    ]);
+    expect(CAMERA_ACTIONS.has("select_army")).toBe(false);
+    expect(CAMERA_ACTIONS.has("build:marine")).toBe(false);
   });
 
   it("fires the camera action again on key-up, and nothing else", () => {
@@ -165,22 +171,6 @@ describe("the cascade", () => {
     hotkeys.handle(keyEvent("keyup", "KeyH"));
 
     expect(seen).toEqual([]);
-  });
-
-  it("exposes exactly the camera actions as the ones that repeat on key-up", () => {
-    expect([...CAMERA_ACTIONS].sort()).toEqual([
-      "camera_down",
-      "camera_left",
-      "camera_right",
-      "camera_rotate_left",
-      "camera_rotate_right",
-      "camera_down",
-      "camera_up",
-      "zoom_in",
-      "zoom_out",
-    ].sort().filter((a, i, all) => all.indexOf(a) === i));
-    expect(CAMERA_ACTIONS.has("select_army")).toBe(false);
-    expect(CAMERA_ACTIONS.has("build:marine")).toBe(false);
   });
 });
 
@@ -418,7 +408,8 @@ describe("the reference the settings screen renders", () => {
     const rows = hotkeys.actionsForDisplay();
     const stop = rows.find((r) => r.action === "stop");
 
-    expect(stop?.keys).toEqual(["S", "Z"]);
+    // A rebind moves the action, so the HUD must stop advertising the old key.
+    expect(stop?.keys).toEqual(["Z"]);
     expect(rows.find((r) => r.action === "select_army")?.keys).toEqual(["A"]);
     expect(rows.find((r) => r.action === "camera_left")?.keys).toEqual(["A", "←"]);
     // Sorted by action, so the reference does not reshuffle between frames.

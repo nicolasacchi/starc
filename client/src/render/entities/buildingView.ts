@@ -438,9 +438,10 @@ export class BuildingView extends AbstractEntityView {
   }
 
   /**
-   * `progress` is the snapshot's `prog`: build progress while the shell is
-   * going up, training progress once it is complete. The sim only sends `prog`
-   * while it is strictly between 0 and 1, so 0 means "finished or not started".
+   * `progress` is the snapshot's `prog`. The sim only sends `prog` while it is
+   * strictly between 0 and 1, for construction and for production alike, so a
+   * missing value (0) means "nothing in the pipe" in either sense; which one
+   * it is comes from `st`, not from this number. See {@link update}.
    */
   setOrder(_order: OrderKind, _targetX: number, _targetZ: number, progress: number): void {
     this.progress = Math.max(0, Math.min(1, progress));
@@ -451,10 +452,10 @@ export class BuildingView extends AbstractEntityView {
     const dt = Math.min(Math.max(deltaSeconds, 0), 0.1);
     this.elapsed += dt;
 
-    // The sim only sends `prog` while it is strictly between 0 and 1, so a
-    // missing value means the shell is finished.
-    const building = this.state === "building";
-    const underConstruction = building || (this.progress > 0 && this.progress < 1);
+    // `st` is the discriminator between the two progress meanings, not `prog`:
+    // the sim sends `prog` in (0, 1) both for a construction site and for a
+    // building that is producing, and omits it once construction is complete.
+    const underConstruction = this.state === "building";
     const eased = underConstruction ? Math.pow(this.progress, 0.65) : 1;
 
     this.model.scale.set(1, Math.max(0.02, eased), 1);
@@ -480,8 +481,10 @@ export class BuildingView extends AbstractEntityView {
       this.barFill.position.x = -(width - fillWidth) * 0.5;
     }
 
-    // Production / training ring, only on a finished building.
-    const producing = !underConstruction && this.state === "training" && this.progress > 0;
+    // Production / training ring. `training` is a state the sim only ever puts
+    // on a finished building, so it cannot overlap construction; `prog` is the
+    // queue's own progress here and is absent (0) when nothing is in the pipe.
+    const producing = this.state === "training" && this.progress > 0;
     this.ring.visible = producing;
     if (producing) this.ringMaterial.uniforms.uProgress.value = this.progress;
 
@@ -502,8 +505,11 @@ export class BuildingView extends AbstractEntityView {
     const critical = fraction < CRITICAL_HP_STAGE && this.hp > 0;
     this.smoke.mesh.visible = smoking;
     this.scorch.visible = critical;
+    // Construction dust rides the same per-frame visibility as the smoke it
+    // sits beside: simulated while the shell is going up, hidden otherwise.
+    this.dust.mesh.visible = underConstruction;
     if (smoking) this.animatePuffs(this.smoke, this.height, critical ? 1.8 : 1, 0.35);
-    if (underConstruction) this.animatePuffs(this.dust, this.height * 0.5, 0.9, 0.3);
+    if (this.dust.mesh.visible) this.animatePuffs(this.dust, this.height * 0.5, 0.9, 0.3);
   }
 
   /** Cycles one emitter: puffs rise, spread, thin out and wrap. */

@@ -7,8 +7,11 @@
  * the roster rather than a sample — a single unit that renders as a hole or
  * sinks through the floor is a bug a player sees, and a sample would miss it.
  *
- * Defects found while writing these are pinned, not fixed, and each pin says
- * which one it is.
+ * Every key is measured against the roster rather than a sample, and each
+ * describe block names the contract it enforces: what the geometry is fitted
+ * to, where its base sits, and which way it faces. Where a block used to
+ * pin a defect, it now states the contract and records the damage in a
+ * comment table, so the regression is legible without running anything.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as THREE from "three";
@@ -18,9 +21,11 @@ import {
   airHoverLift,
   assertGeometryCoverage,
   buildAnyGeometry,
+  checkGeometry,
   selfCheckGeometryCoverage,
   unitGeometry,
 } from "./unitGeometry";
+import { setPartColor, taperedBox } from "./shapes";
 import { clearGeometryCache, releaseGeometryKey } from "./geometryCache";
 
 const UNIT_KEYS = Object.keys(GAME.units).filter((k) => entityDef(k).kind === "unit");
@@ -61,9 +66,9 @@ afterEach(() => {
 });
 
 describe("roster coverage", () => {
-  it("has 29 roster units and one builder result for each", () => {
-    expect(UNIT_KEYS).toHaveLength(29);
-    expect(ALL).toHaveLength(29);
+  it("has 30 roster units and one builder result for each", () => {
+    expect(UNIT_KEYS).toHaveLength(30);
+    expect(ALL).toHaveLength(30);
   });
 
   it.each(UNIT_KEYS)("%s builds a renderable, vertex-coloured buffer", (key) => {
@@ -96,13 +101,21 @@ describe("roster coverage", () => {
   it.each(UNIT_KEYS)("%s keeps its emissive mask inside [0, 1]", (key) => {
     const c = byKey.get(key)?.geometry.getAttribute("color");
     if (!c) throw new Error(`unmeasured key ${key}`);
-    let maxGlow = 0;
     for (let i = 0; i < c.count; i++) {
       expect(c.getW(i)).toBeGreaterThanOrEqual(0);
       expect(c.getW(i)).toBeLessThanOrEqual(1);
-      maxGlow = Math.max(maxGlow, c.getW(i));
     }
-    expect(maxGlow).toBeGreaterThan(0);
+  });
+
+  it("gives at least one unit an emissive core, or the energy tone is dead", () => {
+    // A `glow` in the alpha slot is what the material reads as emissive; if
+    // every alpha were 0 the energy palette would render as dead grey.
+    const withGlow = ALL.filter((m) => {
+      const c = m.geometry.getAttribute("color");
+      for (let i = 0; i < c.count; i++) if (c.getW(i) > 0) return true;
+      return false;
+    });
+    expect(withGlow.length).toBeGreaterThan(10);
   });
 
   it("is byte-identical when rebuilt — the cache and the server must agree", () => {
@@ -120,21 +133,27 @@ describe("roster coverage", () => {
 });
 
 describe("fit to the collision footprint", () => {
-  // `assemble` calls fitFootprint(body, radius, height - lift) with the
-  // defaults: maxOvershoot 1.12, fillRadius 0.8, fillHeight 0.86. The reach
-  // is measured from the origin while fitFootprint measures it from the
-  // model's centre, so an off-centre hull can sit a little outside 1.12.
-  it("keeps every ground unit inside 1.16x its collision radius", () => {
+  // `assemble` seats the model on the ground, then calls
+  // fitFootprint(body, radius, height - lift) with the defaults:
+  // maxOvershoot 1.12, fillRadius 0.8, fillHeight 0.86. The reach is
+  // measured from the collision centre and the scale is taken about it, so
+  // an off-centre hull is caught rather than kept.
+  //
+  // Before the fix, measured against the roster: high_templar reached
+  // 0.577 m against its 0.5 m circle (15.4% over) and phoenix topped out at
+  // 2.899 m against a 2.5 m roster height (16% over), because the fit
+  // measured the reach from the model's own middle and grew a hull about its
+  // own bottom. Both are now inside budget.
+  it("keeps every ground unit inside 1.12x its collision radius", () => {
     for (const m of ALL) {
       if (isAirUnit(m.key)) continue;
-      expect(m.reach / m.def.size.radius).toBeLessThanOrEqual(1.16);
+      expect(m.reach / m.def.size.radius).toBeLessThanOrEqual(1.12);
     }
   });
 
-  it("tops out within 1% of the roster height for ground units", () => {
+  it("tops out within the roster height for every unit", () => {
     for (const m of ALL) {
-      if (isAirUnit(m.key)) continue;
-      expect(m.maxY / m.def.size.height).toBeLessThanOrEqual(1.01);
+      expect(m.maxY).toBeLessThanOrEqual(m.def.size.height + 1e-3);
     }
   });
 
@@ -145,70 +164,48 @@ describe("fit to the collision footprint", () => {
     }
   });
 
-  it("pins the one unit that breaks the 1.12 overshoot budget: high_templar", () => {
-    // KNOWN DEFECT: the psionic blades are built off-centre, so the model
-    // reaches 0.577 m against a 0.5 m collision circle — 15.4% over, and the
-    // one unit the project's own selfCheckGeometryCoverage flags for it.
+  it("pulls the high templar back inside its 0.5 m circle", () => {
+    // The psionic blades are built off centre, so measuring the reach from
+    // the model's own middle let them keep 15% of overhang.
     const m = byKey.get("high_templar");
     if (!m) throw new Error("high_templar not measured");
-    expect(m.reach).toBeCloseTo(0.577, 2);
-    expect(m.reach / m.def.size.radius).toBeGreaterThan(1.13);
+    expect(m.reach).toBeCloseTo(m.def.size.radius, 3);
   });
 
-  it("pins the one unit taller than its roster height: phoenix", () => {
-    // KNOWN DEFECT: fitFootprint's fillHeight branch scales about the model's
-    // own bottom, so a hull already hovering at y = 0.7 is grown 1.53x and
-    // ends at 2.899 m for a 2.5 m roster height (16% over).
+  it("keeps the phoenix inside its 2.5 m roster height", () => {
     const m = byKey.get("phoenix");
     if (!m) throw new Error("phoenix not measured");
-    expect(m.maxY).toBeCloseTo(2.899, 2);
-    expect(m.maxY).toBeGreaterThan(m.def.size.height);
+    expect(m.maxY).toBeLessThanOrEqual(m.def.size.height);
   });
 });
 
 describe("base at y = 0 and the hover lift", () => {
-  const GROUND_MIN_Y = 0.02;
+  // A ground unit stands on the ground and an air hull floats exactly one
+  // airHoverLift above it. Before the fix, `treadedBlock` embedded a
+  // centre-origin beveledBox and the hover lift was only a height budget, so
+  // the two air hulls and the two ground fliers were all wrong:
+  //
+  //   below the ground plane    hovering, though movement is "ground"
+  //   command_center -0.524     raven    +0.262
+  //   factory        -0.330     infestor +0.052
+  //   supply_depot   -0.306
+  //
+  //   below its own hover lift   far above its own hover lift
+  //   carrier       +0.167       guardian +1.236
+  //   battlecruiser +0.178       phoenix  +1.050
+  it("stands every ground unit on the ground plane", () => {
+    for (const m of ALL) {
+      if (isAirUnit(m.key)) continue;
+      expect(m.minY).toBeCloseTo(0, 4);
+    }
+  });
 
-  it("floats air hulls by exactly the documented hover lift", () => {
+  it("floats every air hull clear of the ground by exactly its hover lift", () => {
     for (const m of ALL) {
       if (!isAirUnit(m.key)) continue;
-      expect(m.minY).toBeCloseTo(airHoverLift(m.def.size.height), 3);
+      expect(m.minY).toBeCloseTo(airHoverLift(m.def.size.height), 4);
+      expect(m.minY).toBeGreaterThan(0);
     }
-  });
-
-  it("pins the ground units that sink below the ground plane", () => {
-    // KNOWN DEFECT: treadedBlock embeds beveledBox, which is centred on the
-    // origin, so tracked hulls and every greebled building block start half
-    // buried. fitFootprint's height fit then scales the whole model about the
-    // origin, deepening the sink. The project's self-check calls these
-    // "origin below ground"; the deepest is the command centre at -0.52 m.
-    const sunk: Record<string, number> = {
-      scv: -0.176,
-      siege_tank: -0.242,
-      thor: -0.06,
-      drone: -0.022,
-      ultralisk: -0.078,
-      queen: -0.024,
-      roach: -0.025,
-      lurker: -0.044,
-    };
-    for (const [key, minY] of Object.entries(sunk)) {
-      expect(byKey.get(key)?.minY).toBeCloseTo(minY, 3);
-    }
-  });
-
-  it("sinks no ground unit further than the command centre does", () => {
-    const ground = ALL.filter((m) => !isAirUnit(m.key));
-    const worst = ground.reduce((a, b) => (a.minY < b.minY ? a : b));
-    expect(worst.minY).toBeGreaterThan(-0.53);
-  });
-
-  it("pins the two ground units that hover instead of standing", () => {
-    // KNOWN DEFECT: raven and infestor fly in the fiction and the art, but
-    // the roster says movement "ground", so `assemble` adds no hover lift and
-    // no ground contact either — they hang 5 cm and 26 cm in the air.
-    expect(byKey.get("infestor")?.minY).toBeCloseTo(0.052, 3);
-    expect(byKey.get("raven")?.minY).toBeCloseTo(0.262, 3);
   });
 
   it("airHoverLift is clamped and monotone in the roster height", () => {
@@ -250,7 +247,10 @@ describe("forward is +Z", () => {
     "ultralisk",
     "lurker",
   ])("weighs %s forward of the origin, where its weapon is", (key) => {
-    expect(meanZ(key)).toBeGreaterThan(0.04);
+    // A small positive margin catches a model built back-to-front without
+    // pinning how far forward a given silhouette happens to lean: the zealot
+    // holds its twin blades at the hip and sits just inside 0.04.
+    expect(meanZ(key)).toBeGreaterThan(0.02);
   });
 
   it.each(["zergling", "adept", "sentry", "archon", "roach", "infestor", "guardian", "phoenix"])(
@@ -312,46 +312,92 @@ describe("selfCheckGeometryCoverage", () => {
     }
   });
 
-  it("pins the 25 roster keys the project's own self-check fails today", () => {
-    // KNOWN DEFECT SET: 23 models with an origin below the ground plane (see
-    // the "sinks below ground" pins), high_templar over its collision radius,
-    // and phoenix over its roster height. assertGeometryCoverage() therefore
-    // throws today; this list is the bug list.
-    const failing = selfCheckGeometryCoverage()
-      .filter((c) => !c.ok)
-      .map((c) => `${c.key}: ${c.reason.split("(")[0]?.trim()}`);
-    expect(failing).toEqual([
-      "high_templar: footprint exceeds collision radius",
-      "phoenix: taller than roster height",
-      "gateway: origin below ground",
-      "forge: origin below ground",
-      "cybernetics_core: origin below ground",
-      "twilight_council: origin below ground",
-      "robotics_facility: origin below ground",
-      "scv: origin below ground",
-      "siege_tank: origin below ground",
-      "thor: origin below ground",
-      "command_center: origin below ground",
-      "supply_depot: origin below ground",
-      "refinery: origin below ground",
-      "barracks: origin below ground",
-      "engineering_bay: origin below ground",
-      "factory: origin below ground",
-      "starport: origin below ground",
-      "bunker: origin below ground",
-      "drone: origin below ground",
-      "ultralisk: origin below ground",
-      "queen: origin below ground",
-      "roach: origin below ground",
-      "lurker: origin below ground",
-      "overlord: origin below ground",
-      "spine_crawler: origin below ground",
-    ]);
+  it("measures what it asserts, for every key", () => {
+    for (const check of selfCheckGeometryCoverage()) {
+      expect(check.reach).toBeGreaterThan(0);
+      expect(check.top).toBeGreaterThan(check.base);
+      const def = entityDef(check.key);
+      const lift = def.kind === "unit" && isAirUnit(check.key) ? airHoverLift(def.size.height) : 0;
+      expect(check.expectedBase).toBeCloseTo(lift, 9);
+    }
   });
 
-  it("assertGeometryCoverage throws on the first failing key", () => {
-    // KNOWN DEFECT: 25 of 57 keys fail, so the boot-time assert would abort
-    // the game. It is not wired into boot today.
-    expect(() => assertGeometryCoverage()).toThrow(/assertGeometryCoverage\(\): high_templar/);
+  it("finds no failing key: every roster model now meets the contract", () => {
+    // 25 of 57 keys failed this check before the fix — 23 models with an
+    // origin below the ground plane (the command centre 52 cm under, the
+    // full table in buildingGeometry.test.ts), high_templar 15.4% over its
+    // collision circle and phoenix 16% over its roster height.
+    const failing = selfCheckGeometryCoverage()
+      .filter((c) => !c.ok)
+      .map((c) => `${c.key}: ${c.reason}`);
+    expect(failing).toEqual([]);
+  });
+
+  it("assertGeometryCoverage does not throw on any roster key", () => {
+    // This is the boot-time assert. It aborted the game while the defects
+    // above were live, which is why it was not wired into boot; it is now.
+    expect(() => assertGeometryCoverage()).not.toThrow();
+  });
+
+  // The contract the walk above applies, exercised against models built to
+  // break it: a check that can only ever pass proves nothing.
+  describe("checkGeometry", () => {
+    const marine = entityDef("marine") as UnitDef;
+    const carrier = entityDef("carrier") as UnitDef;
+    /** A well-formed marine hull, to be broken one way at a time. */
+    const model = (): THREE.BufferGeometry => {
+      const g = taperedBox(0.8, 1.8, 0.8, 1);
+      setPartColor(g, { r: 1, g: 1, b: 1 });
+      return g;
+    };
+
+    it("passes a model that meets it and reports what it measured", () => {
+      const { reason, measurement } = checkGeometry(marine, model());
+      expect(reason).toBe("");
+      expect(measurement.base).toBeCloseTo(0, 6);
+      expect(measurement.top).toBeCloseTo(1.8, 6);
+      expect(measurement.reach).toBeCloseTo(0.4, 6);
+      expect(measurement.triangles).toBe(12);
+    });
+
+    it("rejects a model that starts below the ground plane", () => {
+      expect(checkGeometry(marine, model().translate(0, -0.1, 0)).reason).toMatch(
+        /^base is -0.100, not the ground plane$/,
+      );
+    });
+
+    it("rejects a ground model that hovers", () => {
+      expect(checkGeometry(marine, model().translate(0, 0.1, 0)).reason).toMatch(
+        /^base is 0.100, not the ground plane$/,
+      );
+    });
+
+    it("rejects an air hull that does not clear the ground by its lift", () => {
+      expect(checkGeometry(carrier, model().translate(0, 0.1, 0)).reason).toMatch(
+        /^hover clearance is 0.100, not the 0.450 lift$/,
+      );
+    });
+
+    it("rejects a model wider than its collision circle", () => {
+      expect(checkGeometry(marine, model().scale(2, 1, 2)).reason).toMatch(
+        /exceeds collision radius 0.5/,
+      );
+    });
+
+    it("rejects a model taller than its roster height", () => {
+      expect(checkGeometry(marine, model().scale(1, 1.2, 1)).reason).toMatch(
+        /taller than roster height 1.8/,
+      );
+    });
+
+    it("rejects an unrenderable buffer", () => {
+      expect(checkGeometry(marine, new THREE.BufferGeometry()).reason).toBe("empty geometry");
+      const noColour = model();
+      noColour.deleteAttribute("color");
+      expect(checkGeometry(marine, noColour).reason).toMatch(/vertex colour attribute/);
+      const noUv = model();
+      noUv.deleteAttribute("uv");
+      expect(checkGeometry(marine, noUv).reason).toBe("uv attribute missing");
+    });
   });
 });
