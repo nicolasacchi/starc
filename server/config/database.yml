@@ -37,4 +37,13 @@ test:
 # ensure the database is located in a persisted volume.
 production:
   <<: *default
-  # database: path/to/persistent/storage/production.sqlite3
+  database: storage/production.sqlite3
+  # Same reasoning as test:, and it matters more here: the match runner writes
+  # every simulation tick while REST reads and the cable's snapshot broadcast
+  # read the same file, and a one-off `runner`/`console` is a second writer.
+  # Without WAL a reader cannot overlap the writer at all and the server fails
+  # outright with "database is locked" instead of waiting its turn.
+  pragmas:
+    journal_mode: wal
+    synchronous: normal
+    busy_timeout: 15000

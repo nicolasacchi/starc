@@ -4,6 +4,12 @@ module Starc
   # Memoized loader for `shared/game-data.json` — the single source of truth
   # for every unit/building stat. Nothing here hard-codes a number that lives
   # in the roster.
+  #
+  # The roster path defaults to `<Rails.root>/../shared/game-data.json`, which
+  # is correct for a checkout. In the production container `Rails.root` is
+  # `/rails`, so that would resolve to `/shared/game-data.json` at the
+  # filesystem root. Set `STARC_GAME_DATA_PATH` to the roster's absolute path
+  # there; when it is unset the relative path is used unchanged.
   module GameData
     class MalformedError < StandardError; end
 
@@ -115,8 +121,16 @@ module Starc
         defn
       end
 
+      # Absolute path to the roster, overridable per deployment.
+      def roster_path
+        override = ENV["STARC_GAME_DATA_PATH"]
+        return Pathname.new(override) if override && !override.empty?
+
+        Rails.root.join("..", "shared", "game-data.json")
+      end
+
       def load!
-        path = Rails.root.join("..", "shared", "game-data.json")
+        path = roster_path
         raise MalformedError, "game data not found at #{path}" unless File.exist?(path)
 
         parsed = JSON.parse(File.read(path))
@@ -132,7 +146,7 @@ module Starc
         parsed["entities"] = parsed["units"]
         deep_freeze(parsed)
       rescue JSON::ParserError => e
-        raise MalformedError, "game data is not valid JSON: #{e.message}"
+        raise MalformedError, "game data at #{path} is not valid JSON: #{e.message}"
       end
 
       def deep_freeze(obj)

@@ -12,6 +12,9 @@ Rails.application.configure do
   # Full error reports are disabled.
   config.consider_all_requests_local = false
 
+  # The built SPA is served from public/ by this same process, so the file
+  # server has to be on; Rails disables it in production by default.
+  config.public_file_server.enabled = true
   # Cache assets for far-future expiry since they are all digest stamped.
   config.public_file_server.headers = { "cache-control" => "public, max-age=#{1.year.to_i}" }
 
@@ -56,11 +59,15 @@ Rails.application.configure do
   # Only use :id for inspections in production.
   config.active_record.attributes_for_inspect = [ :id ]
 
-  # Enable DNS rebinding protection and other `Host` header attacks.
-  # config.hosts = [
-  #   "example.com",     # Allow requests from example.com
-  #   /.*\.example\.com/ # Allow requests from subdomains like `www.example.com`
-  # ]
+  # Enable DNS rebinding protection and other `Host` header attacks. The
+  # deployment host is the allowlist's seed; extra hosts (a staging box, a
+  # local container) come from RAILS_ALLOWED_HOSTS as a comma-separated list,
+  # so no code change is needed to widen it.
+  config.hosts.clear
+  config.hosts << "starc.scc.im" << "localhost"
+  ENV.fetch("RAILS_ALLOWED_HOSTS", "").split(",").each do |host|
+    config.hosts << host.strip unless host.strip.empty?
+  end
   #
   # Skip DNS rebinding protection for the default health check endpoint.
   # config.host_authorization = { exclude: ->(request) { request.path == "/up" } }

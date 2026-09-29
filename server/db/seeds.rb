@@ -4,6 +4,17 @@
 # leaderboard and player-stats endpoints have something real to render.
 #
 #   bin/rails db:seed
+#
+# These are demo accounts, all with the password "starcraft", plus fabricated
+# leaderboard history. In production that is a liability, so seeding there
+# requires an explicit opt-in:
+#
+#   STARC_SEED_DEMO=1 bin/rails db:seed
+
+if Rails.env.production? && ENV["STARC_SEED_DEMO"].to_s.empty?
+  abort "Refusing to seed demo accounts in production. " \
+        "Set STARC_SEED_DEMO=1 to seed anyway (all accounts share the password \"starcraft\")."
+end
 
 SEED_PLAYERS = [
   { name: "nik",      password: "starcraft", race: "terran",  wins: 42, losses: 17, draws: 3, kills: 1284, deaths: 903, resources_mined: 412_500, units_built: 1102 },

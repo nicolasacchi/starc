@@ -8,6 +8,20 @@
 # upgrade with an *empty* Origin, so a non-browser client — the e2e harness, a
 # CLI, a bot — cannot open the cable at all.
 #
+# PRODUCTION MUST SET `ALLOWED_CABLE_ORIGINS` to the public origin the client is
+# served from (e.g. `https://starc.scc.im`). Nothing here learns a deployment's
+# own origin: the loopback list below is a development convenience and matches
+# nothing real, so an unset variable in production means every browser cable
+# upgrade is refused with 1002 and the game never connects at all — a total
+# outage that looks like a client bug. A non-browser client (the e2e harness, a
+# CLI) is refused an empty Origin unless an entry here matches it too, so the
+# same variable is what lets those clients in.
+#
+# This is deliberately separate from `CORS_ORIGINS` in cors.rb: the browser
+# sends `Origin` on the REST fetch, but this check is the one that decides
+# whether `/cable` is upgraded at all, and only ActionCable's allowlist can
+# grant that.
+#
 # Origins are matched by `Regexp#===` against the raw header, so this must be
 # an array of regexes. Note the trap: assigning `true` here does NOT mean
 # "allow everything" — `Array(true).any? { |o| o === origin }` matches nothing,

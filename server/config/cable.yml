@@ -2,9 +2,11 @@
 #
 # development / test : the in-process async adapter, so the repo runs with no
 #                      external service.
-# production         : Redis. Scaling the app out is a config flip — point
-#                      REDIS_URL at a server and every process sees the same
-#                      `lobby` and `game:<id>` streams.
+# production         : the async adapter by default, because the container
+#                      ships with no Redis. Setting REDIS_URL switches to
+#                      Redis, so scaling the app out stays a config flip —
+#                      every process then sees the same `lobby` and
+#                      `game:<id>` streams.
 development:
   adapter: async
 
@@ -12,6 +14,6 @@ test:
   adapter: async
 
 production:
-  adapter: redis
+  adapter: <%= ENV["REDIS_URL"].to_s.empty? ? "async" : "redis" %>
   url: <%= ENV["REDIS_URL"] %>
   channel_prefix: starc_production

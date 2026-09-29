@@ -1,0 +1,64 @@
+# The build context is the REPOSITORY ROOT, not server/:
+#
+#   docker build -f server/Dockerfile -t starc .
+#
+# because the image is built from three trees at once — server/ (Rails),
+# client/ (vite) and shared/ (the roster and the map data the client imports) —
+# and because server/Dockerfile copies paths relative to that root. Keep
+# everything the builds read; drop only what the image rebuilds or never needs.
+
+# VCS and editor scratch.
+.git
+.gitignore
+.github
+.DS_Store
+*.swp
+.idea
+.vscode
+
+# Throwaway review artefacts (scratch probes, screenshots).
+tmp/
+
+# Root JS tooling: the client build installs from client/bun.lock inside the
+# image, so the host's root workspace is dead weight in the context.
+node_modules/
+
+# Client build artefacts. node_modules/ is reinstalled in the client stage and
+# dist/ is rebuilt there, so shipping the host's copies would bloat the context
+# and risk a stale bundle winning over the one we just built. client/package.json,
+# client/bun.lock, client/src, client/tsconfig.json, client/index.html,
+# client/vite.config.ts and client/public must all stay in.
+client/node_modules
+client/dist
+client/dist-ssr
+client/coverage
+
+# Ruby build artefacts. server/vendor/.keep is deliberately NOT excluded:
+# `COPY server/vendor/ ./vendor/` fails outright if the pattern matches nothing.
+server/vendor/bundle
+server/.bundle
+server/coverage
+
+# Logs, tmp and the SQLite databases are runtime state, not build inputs.
+# db:prepare (via bin/docker-entrypoint) recreates storage/ at boot, and the
+# final stage creates and chowns the directory, so no .keep is needed here.
+server/log/*
+!server/log/.keep
+server/tmp/*
+!server/tmp/.keep
+server/tmp/cache
+server/tmp/pids
+server/tmp/sockets
+server/tmp/storage
+server/storage
+server/db/*.sqlite3
+server/db/*.sqlite3-shm
+server/db/*.sqlite3-wal
+
+# Local environment and credentials — never bake a secret into a layer.
+.env
+.env.*
+server/.env
+server/.env.*
+server/config/master.key
+server/config/credentials/*.key
